@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Darkness - Infinite Gray-scale 3D</title>
+    <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+    <div id="ui-overlay">
+        <div id="start-screen">
+            <h1>DARKNESS</h1>
+            <p>Infinite Navigable Gray-scale World</p>
+            <button id="start-btn">CLICK TO START</button>
+            <p class="controls-hint">WASD to Move | Mouse to Look | Shift to Sprint</p>
+        </div>
+        <div id="hud" style="display: none;">
+            <div class="toolbar">
+                <button id="save-btn">SAVE WORLD</button>
+                <button id="import-btn">IMPORT WORLD</button>
+                <input type="file" id="import-input" accept=".json" style="display: none;">
+            </div>
+            <div id="stats">
+                Chunks: <span id="chunk-count">0</span> | Pos: <span id="player-pos">0, 0</span> | <button id="transition-btn">TRANSITION</button>
+            </div>
+        </div>
+        <div id="crosshair"></div>
+        <div id="rifle-hud"></div>
+    </div>
+    <canvas id="three-canvas"></canvas>
+    <script type="module" src="./main.js"></script>
+</body>
+</html>
