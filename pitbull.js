@@ -24,8 +24,8 @@ export class Pitbull {
         this.wanderTarget = new THREE.Vector3();
         this.targetPosition = new THREE.Vector3();
         
-        this.followDistance = 12;
-        this.maxFollowDistance = 25;
+        this.followDistance = 18;
+        this.maxFollowDistance = 35;
         this.wanderRadius = 8;
         this.moveSpeed = 12;
         this.runSpeed = 30;

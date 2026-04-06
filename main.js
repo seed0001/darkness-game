@@ -2,13 +2,14 @@ import * as THREE from 'three';
 import { WorldManager } from './world.js';
 import { Controls } from './controls.js';
 import { SkyDome } from './sky.js';
-import { Drone } from './drone.js';
 import { Tank } from './tank.js';
 import { Character } from './character.js';
 import { Dog } from './dog.js';
 import { ChickenSpawner } from './chicken.js';
 import { ButterflySpawner } from './butterfly.js';
 import { Pitbull } from './pitbull.js';
+import { ThrowingAxe } from './axe.js';
+import { FireManager } from './fire.js';
 
 class Game {
     constructor() {
@@ -38,7 +39,6 @@ class Game {
         this.controls = new Controls(this.camera, this.renderer.domElement, this.character);
         
         this.sky = new SkyDome(this.scene);
-        this.drone = new Drone(this.scene, this.listener);
         this.tank = new Tank(this.scene);
         
         const getPlayerPos = () => this.character.isLoaded ? this.character.getPosition() : new THREE.Vector3(0, 0, 0);
@@ -47,6 +47,17 @@ class Game {
         this.pitbull = new Pitbull(this.scene, getPlayerPos);
         this.chickenSpawner = new ChickenSpawner(this.scene, getPlayerPos);
         this.butterflySpawner = new ButterflySpawner(this.scene, this.world);
+        
+        const getPlayerDir = () => {
+            const dir = new THREE.Vector3(0, 0, -1);
+            dir.applyQuaternion(this.camera.quaternion);
+            return dir;
+        };
+        this.axe = new ThrowingAxe(this.scene, getPlayerPos, getPlayerDir);
+        this.axe.setCharacter(this.character);
+        this.dog.setAxe(this.axe);
+        
+        this.fireManager = new FireManager(this.scene);
         
         this.bullets = [];
         this.bulletGeometry = new THREE.SphereGeometry(0.15, 8, 8);
@@ -109,8 +120,11 @@ class Game {
         });
 
         window.addEventListener('keydown', (e) => {
-            if (e.key.toLowerCase() === 'f') {
+            if (e.key.toLowerCase() === 'l') {
                 this.toggleFlashlight(!this.flashlightOn);
+            }
+            if (e.key.toLowerCase() === 'f') {
+                this.spawnFire();
             }
             if (e.key === '1') {
                 this.isDay = !this.isDay;
@@ -122,31 +136,34 @@ class Game {
             if (!this.controls.isLocked) return;
             
             if (e.button === 0) {
-                this.fire();
+                this.throwAxe();
             }
         });
 
         window.addEventListener('contextmenu', (e) => e.preventDefault());
     }
 
-    fire() {
-        const bullet = new THREE.Mesh(this.bulletGeometry, this.bulletMaterial);
+    throwAxe() {
+        if (!this.character.isLoaded || !this.axe) return;
         
-        if (this.character.isLoaded) {
-            const charPos = this.character.getPosition();
-            bullet.position.set(charPos.x, charPos.y + 4, charPos.z);
-            
-            const direction = new THREE.Vector3(0, 0, -1);
-            direction.applyQuaternion(this.camera.quaternion);
-            
-            bullet.userData = {
-                velocity: direction.multiplyScalar(400),
-                lifetime: 2.0
-            };
-            
-            this.scene.add(bullet);
-            this.bullets.push(bullet);
-        }
+        const charPos = this.character.getPosition();
+        const direction = new THREE.Vector3(0, 0, -1);
+        direction.applyQuaternion(this.camera.quaternion);
+        
+        this.axe.throw(direction, charPos);
+    }
+
+    spawnFire() {
+        if (!this.character.isLoaded) return;
+        
+        const charPos = this.character.getPosition();
+        const direction = new THREE.Vector3(0, 0, -1);
+        direction.applyQuaternion(this.camera.quaternion);
+        
+        const firePos = charPos.clone();
+        firePos.addScaledVector(direction, 5);
+        
+        this.fireManager.spawnFire(firePos);
     }
 
     initPointerLock() {
@@ -196,16 +213,6 @@ class Game {
     }
 
     checkBulletCollisions(bullet, index) {
-        if (this.drone && this.drone.model && !this.drone.isDestroyed && !this.drone.isCrashing) {
-            const dist = bullet.position.distanceTo(this.drone.model.position);
-            if (dist < 8) {
-                this.drone.takeHit();
-                this.scene.remove(bullet);
-                this.bullets.splice(index, 1);
-                return;
-            }
-        }
-
         if (this.tank && this.tank.container && !this.tank.isDestroyed) {
             const dist = bullet.position.distanceTo(this.tank.container.position);
             if (dist < 10) {
@@ -241,13 +248,18 @@ class Game {
         this.world.update(updatePos);
         this.sky.update(this.clock.getElapsedTime(), this.camera.position, this.dayPhase);
         
-        if (this.drone) this.drone.update(delta, updatePos);
         if (this.tank) this.tank.update(delta, updatePos);
         
         const playerIsMoving = this.controls.moveForward || this.controls.moveBackward || 
                                this.controls.moveLeft || this.controls.moveRight;
         
         if (this.dog) {
+            if (this.axe && this.axe.shouldDogRetrieve()) {
+                const axePos = this.axe.startDogRetrieval();
+                if (axePos) {
+                    this.dog.startAxeRetrieval(axePos);
+                }
+            }
             this.dog.update(delta, this.world);
         }
         if (this.pitbull) {
@@ -258,6 +270,23 @@ class Game {
         }
         if (this.butterflySpawner) {
             this.butterflySpawner.update(delta, updatePos, this.world);
+        }
+        
+        if (this.axe && this.character.isLoaded) {
+            const charPos = this.character.getPosition();
+            
+            if (this.axe.isOnGround() && !this.axe.dogRetrieving) {
+                const distToAxe = charPos.distanceTo(this.axe.getPosition());
+                if (distToAxe < 3) {
+                    this.axe.pickup();
+                }
+            }
+            
+            this.axe.update(delta, this.world, charPos, this.character.rotation);
+        }
+        
+        if (this.fireManager) {
+            this.fireManager.update(delta);
         }
         
         this.updateBullets(delta);

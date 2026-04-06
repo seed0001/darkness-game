@@ -20,6 +20,8 @@ export class Character {
         this.velocity = new THREE.Vector3();
         this.isLoaded = false;
         
+        this.rightHand = null;
+        
         this.load();
     }
 
@@ -48,6 +50,16 @@ export class Character {
                         metalness: 0.5,
                         roughness: 0.5
                     });
+                }
+                
+                if (child.isBone) {
+                    const name = child.name.toLowerCase();
+                    if (name.includes('hand') && name.includes('r') || 
+                        name.includes('right') && name.includes('hand') ||
+                        name.includes('rhand') || name.includes('hand_r')) {
+                        this.rightHand = child;
+                        console.log('Found right hand bone:', child.name);
+                    }
                 }
             });
 
@@ -122,6 +134,19 @@ export class Character {
 
     getPosition() {
         return this.position.clone();
+    }
+
+    getRightHandBone() {
+        return this.rightHand;
+    }
+
+    getRightHandWorldPosition() {
+        if (this.rightHand) {
+            const worldPos = new THREE.Vector3();
+            this.rightHand.getWorldPosition(worldPos);
+            return worldPos;
+        }
+        return null;
     }
 
     update(delta, terrainManager) {

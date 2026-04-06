@@ -23,7 +23,22 @@ export class Dog {
         this.moveSpeed = 15;
         this.runSpeed = 35;
         
+        this.axe = null;
+        this.axeTarget = null;
+        this.hasAxe = false;
+        
         this.load();
+    }
+
+    setAxe(axe) {
+        this.axe = axe;
+    }
+
+    startAxeRetrieval(axePosition) {
+        this.state = 'fetching_axe';
+        this.axeTarget = axePosition.clone();
+        this.targetPosition.copy(axePosition);
+        this.hasAxe = false;
     }
 
     async load() {
@@ -68,7 +83,24 @@ export class Dog {
         const playerPos = this.getPlayerPosition();
         const distToPlayer = this.position.distanceTo(playerPos);
 
-        if (distToPlayer > this.maxFollowDistance) {
+        if (this.state === 'fetching_axe') {
+            const distToAxe = this.position.distanceTo(this.axeTarget);
+            if (distToAxe < 2) {
+                this.hasAxe = true;
+                this.state = 'returning_axe';
+                this.targetPosition.copy(playerPos);
+            }
+        } else if (this.state === 'returning_axe') {
+            this.targetPosition.copy(playerPos);
+            if (distToPlayer < 3) {
+                this.hasAxe = false;
+                if (this.axe) {
+                    this.axe.dogDelivered();
+                }
+                this.state = 'idle';
+                this.idleTimer = 2;
+            }
+        } else if (distToPlayer > this.maxFollowDistance) {
             this.state = 'following';
             this.targetPosition.copy(playerPos);
         } else if (this.state === 'following' && distToPlayer < this.followDistance) {
@@ -108,7 +140,10 @@ export class Dog {
             if (direction.length() > 0.5) {
                 direction.normalize();
                 
-                const speed = this.state === 'following' ? this.runSpeed : this.moveSpeed;
+                const isRunning = this.state === 'following' || 
+                                  this.state === 'fetching_axe' || 
+                                  this.state === 'returning_axe';
+                const speed = isRunning ? this.runSpeed : this.moveSpeed;
                 
                 this.position.x += direction.x * speed * delta;
                 this.position.z += direction.z * speed * delta;
