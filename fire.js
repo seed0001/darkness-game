@@ -1,9 +1,88 @@
 import * as THREE from 'three';
 
+const FIRE_CRACKLE_URL = '/audio/fire_crackling.wav';
+const FIRE_SPRITESHEET = '/Fire Spritesheet.png';
+
+/** Decode fire spritesheet + crackle audio so first campfire spawn does not hitch. */
+export function preloadFireMedia() {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    const sheetP = new Promise((resolve) => {
+        img.onload = () => resolve();
+        img.onerror = () => resolve();
+        img.src = FIRE_SPRITESHEET;
+    });
+    const crackleP = new THREE.AudioLoader()
+        .loadAsync(FIRE_CRACKLE_URL)
+        .catch(() => {});
+    return Promise.all([sheetP, crackleP]);
+}
+
+const FLAME_Y = 2.55;
+const ASH_RADIUS = 1.05;
+const ASH_HEIGHT = 0.14;
+const STONE_RING_RADIUS = 1.78;
+const STONE_COUNT = 12;
+
+function buildCampfireRing(group) {
+    const stoneMat = new THREE.MeshStandardMaterial({
+        color: 0x6a6560,
+        roughness: 0.94,
+        metalness: 0.04
+    });
+    const ashMat = new THREE.MeshStandardMaterial({
+        color: 0x1e1a18,
+        roughness: 1,
+        metalness: 0
+    });
+
+    const ash = new THREE.Mesh(
+        new THREE.CylinderGeometry(ASH_RADIUS, ASH_RADIUS * 0.92, ASH_HEIGHT, 24, 1, false),
+        ashMat
+    );
+    ash.position.y = ASH_HEIGHT * 0.5 + 0.02;
+    ash.receiveShadow = true;
+    ash.castShadow = false;
+    group.add(ash);
+
+    const innerRim = new THREE.Mesh(
+        new THREE.TorusGeometry(ASH_RADIUS + 0.06, 0.09, 8, 24),
+        stoneMat
+    );
+    innerRim.rotation.x = Math.PI / 2;
+    innerRim.position.y = ASH_HEIGHT + 0.04;
+    innerRim.receiveShadow = true;
+    innerRim.castShadow = true;
+    group.add(innerRim);
+
+    for (let i = 0; i < STONE_COUNT; i++) {
+        const t = (i / STONE_COUNT) * Math.PI * 2;
+        const jitter = (Math.random() - 0.5) * 0.12;
+        const r = STONE_RING_RADIUS + jitter;
+        const rock = new THREE.Mesh(
+            new THREE.DodecahedronGeometry(0.28 + Math.random() * 0.12, 0),
+            stoneMat
+        );
+        rock.position.set(Math.cos(t) * r, 0.26 + Math.random() * 0.08, Math.sin(t) * r);
+        rock.rotation.set(
+            0.35 + Math.random() * 0.45,
+            t + (Math.random() - 0.5) * 0.4,
+            (Math.random() - 0.5) * 0.5
+        );
+        rock.scale.setScalar(0.82 + Math.random() * 0.38);
+        rock.castShadow = true;
+        rock.receiveShadow = true;
+        group.add(rock);
+    }
+}
+
 export class Fire {
-    constructor(scene, position) {
+    constructor(scene, position, audioListener = null) {
         this.scene = scene;
         this.pos = position.clone();
+        this.audioListener = audioListener;
+        this.sound = null;
+        this.audioLoader = new THREE.AudioLoader();
         
         // Measured from actual file size 3072x2816 => 12x11 cells of 256x256.
         this.cols = 12;
@@ -29,12 +108,14 @@ export class Fire {
     }
 
     async setup() {
+        buildCampfireRing(this.group);
+
         this.sourceImage = new Image();
         this.sourceImage.crossOrigin = 'anonymous';
         
         await new Promise((resolve) => {
             this.sourceImage.onload = resolve;
-            this.sourceImage.src = '/Fire Spritesheet.png';
+            this.sourceImage.src = FIRE_SPRITESHEET;
         });
         
         this.frameW = this.sourceImage.width / this.cols;
@@ -63,32 +144,58 @@ export class Fire {
 
         // First cross
         const mesh1 = new THREE.Mesh(geo, this.material);
-        mesh1.position.y = 2;
+        mesh1.position.y = FLAME_Y;
         this.group.add(mesh1);
 
         const mesh2 = new THREE.Mesh(geo.clone(), this.material);
-        mesh2.position.y = 2;
+        mesh2.position.y = FLAME_Y;
         mesh2.rotation.y = Math.PI / 2;
         this.group.add(mesh2);
 
         // Second cross (offset 45 degrees) for denser volume
         const mesh3 = new THREE.Mesh(geo.clone(), this.material);
-        mesh3.position.y = 2;
+        mesh3.position.y = FLAME_Y;
         mesh3.rotation.y = Math.PI / 4;
         this.group.add(mesh3);
 
         const mesh4 = new THREE.Mesh(geo.clone(), this.material);
-        mesh4.position.y = 2;
+        mesh4.position.y = FLAME_Y;
         mesh4.rotation.y = (3 * Math.PI) / 4;
         this.group.add(mesh4);
 
         const light = new THREE.PointLight(0xff5500, 8, 12);
-        light.position.y = 2;
+        light.position.y = FLAME_Y;
         this.group.add(light);
         this.light = light;
 
         this.scene.add(this.group);
+        this.initCrackleAudio();
         this.ready = true;
+    }
+
+    initCrackleAudio() {
+        if (!this.audioListener) return;
+
+        this.sound = new THREE.PositionalAudio(this.audioListener);
+        this.sound.position.set(0, FLAME_Y, 0);
+
+        this.audioLoader.load(
+            FIRE_CRACKLE_URL,
+            (buffer) => {
+                if (!this.sound) return;
+                this.sound.setBuffer(buffer);
+                this.sound.setLoop(true);
+                this.sound.setVolume(0.65);
+                this.sound.setRefDistance(8);
+                this.sound.setRolloffFactor(1.2);
+                this.sound.setMaxDistance(42);
+                this.sound.setDistanceModel('inverse');
+                this.group.add(this.sound);
+                this.sound.play();
+            },
+            undefined,
+            (err) => console.warn('Fire crackling audio failed to load:', err)
+        );
     }
 
     drawFrame(frameIndex) {
@@ -124,18 +231,25 @@ export class Fire {
     }
 
     dispose() {
+        if (this.sound) {
+            if (this.sound.isPlaying) this.sound.stop();
+            this.group.remove(this.sound);
+            this.sound.disconnect();
+            this.sound = null;
+        }
         this.scene.remove(this.group);
     }
 }
 
 export class FireManager {
-    constructor(scene) {
+    constructor(scene, audioListener = null) {
         this.scene = scene;
+        this.audioListener = audioListener;
         this.fires = [];
     }
 
     spawnFire(pos) {
-        const f = new Fire(this.scene, pos);
+        const f = new Fire(this.scene, pos, this.audioListener);
         this.fires.push(f);
     }
 

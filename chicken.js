@@ -181,6 +181,7 @@ export class ChickenSpawner {
         this.spawnInterval = 5;
         this.spawnRadius = 60;
         this.minSpawnDist = 30;
+        this.autoSpawn = false;
     }
 
     getChickens() {
@@ -192,7 +193,11 @@ export class ChickenSpawner {
         
         const activeChickens = this.chickens.filter(c => !c.isDropped || c.despawnTimer > 0);
         
-        if (this.spawnTimer >= this.spawnInterval && activeChickens.length < this.maxChickens) {
+        if (
+            this.autoSpawn &&
+            this.spawnTimer >= this.spawnInterval &&
+            activeChickens.length < this.maxChickens
+        ) {
             this.spawnTimer = 0;
             this.spawnChicken();
         }

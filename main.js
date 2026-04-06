@@ -1,15 +1,15 @@
 import * as THREE from 'three';
+import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 import { WorldManager } from './world.js';
 import { Controls } from './controls.js';
 import { SkyDome } from './sky.js';
 import { Tank } from './tank.js';
 import { Character } from './character.js';
-import { Dog } from './dog.js';
 import { ChickenSpawner } from './chicken.js';
 import { ButterflySpawner } from './butterfly.js';
-import { Pitbull } from './pitbull.js';
 import { ThrowingAxe } from './axe.js';
-import { FireManager } from './fire.js';
+import { FireManager, preloadFireMedia } from './fire.js';
+import { AmbientWind } from './ambientWind.js';
 
 class Game {
     constructor() {
@@ -22,6 +22,7 @@ class Game {
 
         this.listener = new THREE.AudioListener();
         this.camera.add(this.listener);
+        this.ambientWind = new AmbientWind(this.listener);
 
         this.renderer = new THREE.WebGLRenderer({
             canvas: document.querySelector('#three-canvas'),
@@ -29,11 +30,14 @@ class Game {
         });
 
         this.renderer.setSize(window.innerWidth, window.innerHeight);
-        this.renderer.setPixelRatio(window.devicePixelRatio);
+        this.renderer.setPixelRatio(Math.min(1.5, window.devicePixelRatio || 1));
         this.renderer.shadowMap.enabled = true;
+        this.renderer.shadowMap.type = THREE.BasicShadowMap;
+        this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+        this.renderer.powerPreference = 'high-performance';
 
         this.world = new WorldManager(this.scene);
-        
+
         this.character = new Character(this.scene);
         
         this.controls = new Controls(this.camera, this.renderer.domElement, this.character);
@@ -43,8 +47,6 @@ class Game {
         
         const getPlayerPos = () => this.character.isLoaded ? this.character.getPosition() : new THREE.Vector3(0, 0, 0);
         
-        this.dog = new Dog(this.scene, getPlayerPos);
-        this.pitbull = new Pitbull(this.scene, getPlayerPos);
         this.chickenSpawner = new ChickenSpawner(this.scene, getPlayerPos);
         this.butterflySpawner = new ButterflySpawner(this.scene, this.world);
         
@@ -55,9 +57,8 @@ class Game {
         };
         this.axe = new ThrowingAxe(this.scene, getPlayerPos, getPlayerDir);
         this.axe.setCharacter(this.character);
-        this.dog.setAxe(this.axe);
-        
-        this.fireManager = new FireManager(this.scene);
+
+        this.fireManager = new FireManager(this.scene, this.listener);
         
         this.bullets = [];
         this.bulletGeometry = new THREE.SphereGeometry(0.15, 8, 8);
@@ -71,9 +72,8 @@ class Game {
         this.initLights();
         this.initUI();
         this.initPointerLock();
-        this.clock = new THREE.Clock();
+        this.clock = null;
 
-        this.animate();
         window.addEventListener('resize', () => this.onResize());
 
         setInterval(() => {
@@ -87,9 +87,81 @@ class Game {
         }, 100);
     }
 
+    async runInitialLoad() {
+        const overlay = document.getElementById('loading-screen');
+        const statusEl = document.getElementById('loading-status');
+        const fillEl = document.getElementById('loading-bar-fill');
+
+        const setStatus = (text) => {
+            if (statusEl) statusEl.textContent = text;
+        };
+        const setProgress = (t) => {
+            if (fillEl) fillEl.style.width = `${Math.round(THREE.MathUtils.clamp(t, 0, 1) * 100)}%`;
+        };
+
+        try {
+            setStatus('Loading models, textures, and audio…');
+            setProgress(0.02);
+
+            await Promise.all([
+                this.world.whenCoreAssetsReady(),
+                this.character.readyPromise.catch((err) => {
+                    console.warn('Character load issue — using default height for tree scale.', err);
+                }),
+                this.axe.readyPromise.catch((err) => console.warn('Axe load:', err)),
+                this.tank.readyPromise.catch((err) => console.warn('Tank load:', err)),
+                this.ambientWind.bufferPromise,
+                preloadFireMedia(),
+                new FBXLoader().loadAsync('/models/butterfly.fbx').catch(() => {}),
+                new FBXLoader().loadAsync('/models/chicken.fbx').catch(() => {})
+            ]);
+
+            setProgress(0.28);
+            const humanH =
+                this.character.isLoaded && Number.isFinite(this.character.getHeightWorld())
+                    ? this.character.getHeightWorld()
+                    : 1.65;
+
+            setStatus('Loading tree model…');
+            await this.world.loadPineTreeModel(humanH);
+            setProgress(0.34);
+            setStatus('Loading terrain, grass, and decorations…');
+            await this.world.preloadWorldAt(new THREE.Vector3(0, 0, 0), (p) => {
+                setProgress(0.34 + p * 0.6);
+            });
+
+            setStatus('Preparing graphics…');
+            setProgress(0.94);
+            for (let i = 0; i < 2; i++) {
+                await new Promise((r) => requestAnimationFrame(r));
+                if (typeof this.renderer.compile === 'function') {
+                    this.renderer.compile(this.scene, this.camera);
+                }
+                this.renderer.render(this.scene, this.camera);
+            }
+        } catch (err) {
+            console.error(err);
+            setStatus('Loading issue — check console. Starting anyway…');
+        }
+
+        setProgress(1);
+        setStatus('Ready');
+        if (overlay) {
+            overlay.classList.add('loading-screen--hidden');
+        }
+    }
+
+    startGameLoop() {
+        if (this.clock) return;
+        this.clock = new THREE.Clock();
+        this.animate();
+    }
+
     initLights() {
         this.flashlight = new THREE.SpotLight(0xffffff, 0, 300, Math.PI / 6, 0.4, 1);
         this.flashlight.castShadow = true;
+        this.flashlight.shadow.mapSize.setScalar(512);
+        this.flashlight.shadow.bias = -0.0001;
         this.scene.add(this.flashlight);
         this.scene.add(this.flashlight.target);
 
@@ -99,6 +171,14 @@ class Game {
         this.sunLight = new THREE.DirectionalLight(0xffffff, 0);
         this.sunLight.position.set(100, 200, -100);
         this.sunLight.castShadow = true;
+        this.sunLight.shadow.mapSize.setScalar(1024);
+        this.sunLight.shadow.camera.near = 1;
+        this.sunLight.shadow.camera.far = 220;
+        const sc = 120;
+        this.sunLight.shadow.camera.left = -sc;
+        this.sunLight.shadow.camera.right = sc;
+        this.sunLight.shadow.camera.top = sc;
+        this.sunLight.shadow.camera.bottom = -sc;
         this.scene.add(this.sunLight);
     }
 
@@ -110,6 +190,9 @@ class Game {
             this.controls.lock();
             if (THREE.AudioContext.getContext().state !== 'running') {
                 THREE.AudioContext.getContext().resume();
+            }
+            if (this.ambientWind) {
+                this.ambientWind.beginAfterUserGesture();
             }
         });
 
@@ -129,6 +212,26 @@ class Game {
             if (e.key === '1') {
                 this.isDay = !this.isDay;
                 this.targetDayPhase = this.isDay ? 1.0 : 0.0;
+            }
+
+            if (e.repeat) return;
+
+            if (e.key.toLowerCase() === 'e') {
+                this.tryPickupOrDropRock();
+            }
+
+            const playerPos = this.character.isLoaded
+                ? this.character.getPosition()
+                : new THREE.Vector3();
+
+            if (e.key === '4' && this.butterflySpawner) {
+                this.butterflySpawner.spawnOneNear(playerPos, this.world, 2);
+            }
+            if (e.key === '5' && this.butterflySpawner) {
+                this.butterflySpawner.spawnOneNear(playerPos, this.world, 3);
+            }
+            if (e.key === '6' && this.butterflySpawner) {
+                this.butterflySpawner.spawnOneNear(playerPos, this.world, 1);
             }
         });
 
@@ -153,6 +256,34 @@ class Game {
         this.axe.throw(direction, charPos);
     }
 
+    tryPickupOrDropRock() {
+        if (!this.character.isLoaded) return;
+        if (this.character.getHeldRock()) {
+            const mesh = this.character.dropHeldRock(this.scene, this.world, this.camera);
+            if (mesh && mesh.userData.pickupRock) {
+                this.world.registerPickupRock(mesh);
+            }
+            return;
+        }
+        const pos = this.character.getPosition();
+        let best = null;
+        let bestD = 2.9;
+        const list = this.world.pickupRocks;
+        for (let i = 0; i < list.length; i++) {
+            const mesh = list[i];
+            if (!mesh.parent) continue;
+            const d = pos.distanceTo(mesh.position);
+            if (d < bestD) {
+                bestD = d;
+                best = mesh;
+            }
+        }
+        if (best) {
+            this.world.unregisterPickupRock(best);
+            this.character.attachHeldRock(best);
+        }
+    }
+
     spawnFire() {
         if (!this.character.isLoaded) return;
         
@@ -162,7 +293,8 @@ class Game {
         
         const firePos = charPos.clone();
         firePos.addScaledVector(direction, 5);
-        
+        firePos.y = this.world.getHeightAt(firePos.x, firePos.z) + 0.08;
+
         this.fireManager.spawnFire(firePos);
     }
 
@@ -194,6 +326,7 @@ class Game {
         this.camera.aspect = window.innerWidth / window.innerHeight;
         this.camera.updateProjectionMatrix();
         this.renderer.setSize(window.innerWidth, window.innerHeight);
+        this.renderer.setPixelRatio(Math.min(1.5, window.devicePixelRatio || 1));
     }
 
     updateBullets(delta) {
@@ -226,7 +359,7 @@ class Game {
 
     animate() {
         requestAnimationFrame(() => this.animate());
-        const delta = this.clock.getDelta();
+        const delta = this.clock ? this.clock.getDelta() : 0;
 
         const transitionSpeed = 0.5;
         if (Math.abs(this.dayPhase - this.targetDayPhase) > 0.01) {
@@ -246,25 +379,16 @@ class Game {
         
         const updatePos = this.character.isLoaded ? this.character.getPosition() : this.camera.position;
         this.world.update(updatePos);
-        this.sky.update(this.clock.getElapsedTime(), this.camera.position, this.dayPhase);
+        const elapsed = this.clock ? this.clock.getElapsedTime() : 0;
+        this.world.updateDecorationTime(elapsed);
+        this.world.updateTreeWind(elapsed);
+        if (this.character.isLoaded) {
+            this.world.updatePickupRockHighlight(updatePos, elapsed);
+        }
+        this.sky.update(elapsed, this.camera.position, this.dayPhase);
         
         if (this.tank) this.tank.update(delta, updatePos);
-        
-        const playerIsMoving = this.controls.moveForward || this.controls.moveBackward || 
-                               this.controls.moveLeft || this.controls.moveRight;
-        
-        if (this.dog) {
-            if (this.axe && this.axe.shouldDogRetrieve()) {
-                const axePos = this.axe.startDogRetrieval();
-                if (axePos) {
-                    this.dog.startAxeRetrieval(axePos);
-                }
-            }
-            this.dog.update(delta, this.world);
-        }
-        if (this.pitbull) {
-            this.pitbull.update(delta, this.world, playerIsMoving);
-        }
+
         if (this.chickenSpawner) {
             this.chickenSpawner.update(delta, this.world, null);
         }
@@ -305,4 +429,7 @@ class Game {
     }
 }
 
-new Game();
+const game = new Game();
+game.runInitialLoad().finally(() => {
+    game.startGameLoop();
+});

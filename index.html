@@ -7,12 +7,21 @@
     <link rel="stylesheet" href="./style.css">
 </head>
 <body>
+    <div id="loading-screen" aria-live="polite">
+        <div class="loading-screen__inner">
+            <h2 class="loading-screen__title">DARKNESS</h2>
+            <p id="loading-status" class="loading-screen__status">Preparing world…</p>
+            <div class="loading-screen__bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                <div id="loading-bar-fill" class="loading-screen__bar-fill"></div>
+            </div>
+        </div>
+    </div>
     <div id="ui-overlay">
         <div id="start-screen">
             <h1>DARKNESS</h1>
             <p>Infinite Navigable Gray-scale World</p>
             <button id="start-btn">CLICK TO START</button>
-            <p class="controls-hint">WASD to Move | Mouse to Look | Shift to Sprint</p>
+            <p class="controls-hint">WASD | Mouse | Shift sprint | E pick up / drop rock | 4–6 butterflies</p>
         </div>
         <div id="hud" style="display: none;">
             <div class="toolbar">

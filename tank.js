@@ -22,23 +22,27 @@ export class Tank {
         this.angle = 1.5; 
         this.radius = 80;
         this.speed = 0.2;
-        
-        this.loadModel();
+
+        this.readyPromise = this.loadModel();
     }
 
-    loadModel() {
+    async loadModel() {
         const path = '/tank/';
         const prefix = 'Meshy_AI_a_tank_ATV_thing_that_0406065337_texture';
-        
-        const baseColor = this.textureLoader.load(`${path}${prefix}.png`);
-        baseColor.colorSpace = THREE.SRGBColorSpace;
-        const normalMap = this.textureLoader.load(`${path}${prefix}_normal.png`);
-        const metallicMap = this.textureLoader.load(`${path}${prefix}_metallic.png`);
-        const roughnessMap = this.textureLoader.load(`${path}${prefix}_roughness.png`);
 
-        this.loader.load(`${path}${prefix}.fbx`, (fbx) => {
+        try {
+            const [baseColor, normalMap, metallicMap, roughnessMap, fbx] = await Promise.all([
+                this.textureLoader.loadAsync(`${path}${prefix}.png`),
+                this.textureLoader.loadAsync(`${path}${prefix}_normal.png`),
+                this.textureLoader.loadAsync(`${path}${prefix}_metallic.png`),
+                this.textureLoader.loadAsync(`${path}${prefix}_roughness.png`),
+                this.loader.loadAsync(`${path}${prefix}.fbx`)
+            ]);
+
+            baseColor.colorSpace = THREE.SRGBColorSpace;
+
             this.model = fbx;
-            
+
             this.model.traverse((child) => {
                 if (child.isMesh) {
                     child.material = new THREE.MeshStandardMaterial({
@@ -48,7 +52,7 @@ export class Tank {
                         roughnessMap: roughnessMap,
                         metalness: 1.0,
                         roughness: 0.4,
-                        emissive: 0x0055ff, 
+                        emissive: 0x0055ff,
                         emissiveIntensity: 0.2
                     });
                     child.castShadow = true;
@@ -57,12 +61,14 @@ export class Tank {
             });
 
             this.model.scale.set(0.01, 0.01, 0.01);
-            this.model.rotation.y = -Math.PI / 2; 
-            
+            this.model.rotation.y = -Math.PI / 2;
+
             this.container.add(this.model);
             this.initGlow();
             console.log('AI Tank Refined: Resized and Repositioned');
-        });
+        } catch (e) {
+            console.error('Tank model load failed:', e);
+        }
     }
 
     initGlow() {

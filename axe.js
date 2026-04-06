@@ -26,8 +26,8 @@ export class ThrowingAxe {
         this.dogRetrieving = false;
         
         this.character = null;
-        
-        this.load();
+
+        this.readyPromise = this.load();
     }
 
     setCharacter(character) {

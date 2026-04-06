@@ -21,8 +21,10 @@ export class Character {
         this.isLoaded = false;
         
         this.rightHand = null;
-        
-        this.load();
+        this.heldRock = null;
+        this.heightWorld = 1.65;
+
+        this.readyPromise = this.load();
     }
 
     async load() {
@@ -94,6 +96,12 @@ export class Character {
                 this.currentAction = this.animations.idle;
             }
 
+            this.model.updateMatrixWorld(true);
+            const bounds = new THREE.Box3().setFromObject(this.model);
+            const size = new THREE.Vector3();
+            bounds.getSize(size);
+            this.heightWorld = Math.max(size.y, 0.01);
+
             this.isLoaded = true;
             console.log('Character loaded successfully');
 
@@ -136,6 +144,10 @@ export class Character {
         return this.position.clone();
     }
 
+    getHeightWorld() {
+        return this.heightWorld;
+    }
+
     getRightHandBone() {
         return this.rightHand;
     }
@@ -147,6 +159,63 @@ export class Character {
             return worldPos;
         }
         return null;
+    }
+
+    getHeldRock() {
+        return this.heldRock;
+    }
+
+    attachHeldRock(mesh) {
+        if (!this.isLoaded || !mesh || this.heldRock) return false;
+        this.heldRock = mesh;
+        mesh.removeFromParent();
+        const rest = mesh.userData.restScale ?? mesh.scale.x;
+        const inHand = rest * 0.52;
+        if (this.rightHand) {
+            this.rightHand.add(mesh);
+            mesh.position.set(0.055, 0.085, 0.048);
+            mesh.rotation.set(0.28, 0.42, 0.18);
+            mesh.scale.setScalar(inHand);
+        } else if (this.model) {
+            this.model.add(mesh);
+            mesh.position.set(0.32, 1.15, 0.12);
+            mesh.rotation.set(0.2, 0.5, 0.15);
+            mesh.scale.setScalar(inHand);
+        } else {
+            this.heldRock = null;
+            return false;
+        }
+        if (mesh.material) {
+            mesh.material.emissive.setHex(0x000000);
+            mesh.material.emissiveIntensity = 0;
+        }
+        return true;
+    }
+
+    dropHeldRock(scene, world, camera) {
+        if (!this.isLoaded || !this.heldRock || !scene || !world) return null;
+        const mesh = this.heldRock;
+        this.heldRock = null;
+        mesh.removeFromParent();
+        const rest = mesh.userData.restScale ?? 1;
+        mesh.scale.setScalar(rest);
+
+        const forward = new THREE.Vector3(0, 0, -1);
+        if (camera) forward.applyQuaternion(camera.quaternion);
+        forward.y = 0;
+        if (forward.lengthSq() < 1e-6) forward.set(0, 0, -1);
+        else forward.normalize();
+
+        const p = this.position.clone().addScaledVector(forward, 0.95);
+        p.y = world.getHeightAt(p.x, p.z) + 0.12;
+        mesh.position.copy(p);
+        mesh.rotation.set(
+            (Math.random() - 0.5) * 0.4,
+            this.rotation + (Math.random() - 0.5) * 0.5,
+            (Math.random() - 0.5) * 0.4
+        );
+        scene.add(mesh);
+        return mesh;
     }
 
     update(delta, terrainManager) {

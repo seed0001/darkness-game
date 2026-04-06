@@ -4,7 +4,8 @@ import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 const GLOW_COLORS = [
     new THREE.Color(0x00aaff),
     new THREE.Color(0xff3333),
-    new THREE.Color(0x33ff66)
+    new THREE.Color(0x33ff66),
+    new THREE.Color(0xffe066)
 ];
 
 export class Butterfly {
@@ -126,13 +127,40 @@ export class ButterflySpawner {
         this.worldManager = worldManager;
         this.butterflies = [];
         this.spawnedPositions = new Set();
-        this.maxButterflies = 30;
+        this.maxButterflies = 24;
         this.spawnRadius = 100;
         this.colorIndex = 0;
+        this.autoSpawn = false;
+    }
+
+    spawnOneNear(playerPosition, terrainManager, colorIndex) {
+        if (this.butterflies.length >= this.maxButterflies) {
+            const removed = this.butterflies.shift();
+            if (removed) {
+                const posKey = `${Math.floor(removed.basePosition.x / 10)},${Math.floor(removed.basePosition.z / 10)}`;
+                this.spawnedPositions.delete(posKey);
+                removed.dispose();
+            }
+        }
+
+        const angle = Math.random() * Math.PI * 2;
+        const dist = 10 + Math.random() * 18;
+        const spawnX = playerPosition.x + Math.cos(angle) * dist;
+        const spawnZ = playerPosition.z + Math.sin(angle) * dist;
+
+        let spawnY = 5;
+        if (terrainManager) {
+            spawnY = terrainManager.getHeightAt(spawnX, spawnZ) + 5;
+        }
+
+        const spawnPos = new THREE.Vector3(spawnX, spawnY, spawnZ);
+        const idx = ((colorIndex % GLOW_COLORS.length) + GLOW_COLORS.length) % GLOW_COLORS.length;
+        const butterfly = new Butterfly(this.scene, spawnPos, idx);
+        this.butterflies.push(butterfly);
     }
 
     update(delta, playerPosition, terrainManager) {
-        if (this.butterflies.length < this.maxButterflies) {
+        if (this.autoSpawn && this.butterflies.length < this.maxButterflies) {
             this.trySpawnNearTrees(playerPosition, terrainManager);
         }
 
