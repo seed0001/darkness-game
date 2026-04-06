@@ -7,8 +7,11 @@ import {
     buildGrassInstancedMesh,
     buildGrassInstancedMeshFromMatrices,
     createPickupRocksForChunk,
-    createBouldersForChunk
+    createPickupSticksForChunk,
+    createBouldersForChunk,
+    createStickWoodMaterial
 } from './grassRocks.js';
+import { computeGrassInstanceMatricesWithHeight } from './chunkGenShared.js';
 
 function mulberry32(a) {
     return function () {
@@ -23,6 +26,30 @@ function chunkTreeRng(cx, cz) {
     let h = cx * 374761393 + cz * 668265263 + 0x51f4e2b7;
     h = (h ^ (h >>> 13)) * 1274126177;
     return mulberry32((h ^ (h >>> 16)) >>> 0);
+}
+
+/** Elliptical depression next to spawn (0,0) — east / slightly north */
+export const LAKE_CX = 26;
+export const LAKE_CZ = 12;
+const LAKE_RX = 23;
+const LAKE_RZ = 17;
+const LAKE_MAX_DEPTH = 2.45;
+
+/** True when the player is close enough to the lake for shore interactions (lie down, etc.). */
+export function isNearLakeWater(wx, wz, margin = 4) {
+    const dx = (wx - LAKE_CX) / (LAKE_RX + margin);
+    const dz = (wz - LAKE_CZ) / (LAKE_RZ + margin);
+    return dx * dx + dz * dz <= 1;
+}
+
+export function sampleLakeDepth(wx, wz) {
+    const dx = (wx - LAKE_CX) / LAKE_RX;
+    const dz = (wz - LAKE_CZ) / LAKE_RZ;
+    const e = dx * dx + dz * dz;
+    if (e >= 1) return 0;
+    const t = 1 - e;
+    const s = t * t * (3 - 2 * t);
+    return -LAKE_MAX_DEPTH * Math.pow(s, 1.08);
 }
 
 // Simple Simplex-like noise for terrain
@@ -81,6 +108,8 @@ export class WorldManager {
         this.activeChunks = new Set();
         this.waterLevel = -10.0;
         this.pickupRocks = [];
+        this.pickupSticks = [];
+        this.choppableLogs = [];
         this.grassGeometry = createSharedGrassBladeGeometry();
         this.grassMaterial = createSharedGrassWindMaterial();
 
@@ -155,6 +184,7 @@ export class WorldManager {
         );
         this.scene.add(grass);
         chunk.grass = grass;
+        this.applyLakeGrassToChunkIfNeeded(chunk);
     }
 
     fallbackGrassForChunk(key) {
@@ -171,6 +201,7 @@ export class WorldManager {
         );
         this.scene.add(grass);
         chunk.grass = grass;
+        this.applyLakeGrassToChunkIfNeeded(chunk);
     }
 
     loadPineTreeModel(humanHeightWorld) {
@@ -263,6 +294,9 @@ export class WorldManager {
             tree.scale.setScalar(scale);
             tree.rotation.y = trng() * Math.PI * 2;
             tree.userData.meshyTree = true;
+            tree.userData.treePhase = 'standing';
+            tree.userData.chopStandingHits = 0;
+            tree.userData.chunkKey = `${cx},${cz}`;
             tree.userData.baseRotY = tree.rotation.y;
             tree.userData.baseRotX = 0;
             tree.userData.baseRotZ = 0;
@@ -270,11 +304,16 @@ export class WorldManager {
 
             const tx = (trng() - 0.5) * 2 * inset;
             const tz = (trng() - 0.5) * 2 * inset;
-            tree.position.set(cx * this.chunkSize + tx, groundY, cz * this.chunkSize + tz);
+            const wx = cx * this.chunkSize + tx;
+            const wz = cz * this.chunkSize + tz;
+            if (sampleLakeDepth(wx, wz) < -0.48) continue;
+
+            tree.position.set(wx, groundY, wz);
             tree.updateMatrixWorld(true);
 
             const bounds = new THREE.Box3().setFromObject(tree);
-            tree.position.y += groundY - bounds.min.y;
+            const terrainH = sampleLakeDepth(wx, wz);
+            tree.position.y += groundY + terrainH - bounds.min.y;
 
             this.scene.add(tree);
             outArray.push(tree);
@@ -331,6 +370,23 @@ export class WorldManager {
                 this.water.rotation.x = -Math.PI / 2;
                 this.water.position.y = this.waterLevel;
                 this.scene.add(this.water);
+
+                const lakeW = LAKE_RX * 2 + 14;
+                const lakeD = LAKE_RZ * 2 + 14;
+                const lakeGeometry = new THREE.PlaneGeometry(lakeW, lakeD);
+                this.lakeWater = new Water(lakeGeometry, {
+                    textureWidth: 512,
+                    textureHeight: 512,
+                    waterNormals: texture,
+                    sunDirection: new THREE.Vector3(0.58, 0.72, 0.38).normalize(),
+                    sunColor: 0xffffff,
+                    waterColor: 0x1a5a6a,
+                    distortionScale: 5.2,
+                    fog: this.scene.fog !== undefined
+                });
+                this.lakeWater.rotation.x = -Math.PI / 2;
+                this.lakeWater.position.set(LAKE_CX, -0.12, LAKE_CZ);
+                this.scene.add(this.lakeWater);
             })
             .catch((err) => {
                 console.warn('Water normals failed to load:', err);
@@ -352,7 +408,11 @@ export class WorldManager {
         const heights = [];
 
         for (let i = 0; i < position.count; i++) {
-            let h = 0; 
+            const lx = position.getX(i);
+            const lz = position.getZ(i);
+            const wx = cx * this.chunkSize + lx;
+            const wz = cz * this.chunkSize + lz;
+            const h = sampleLakeDepth(wx, wz);
             position.setY(i, h);
             heights.push(h);
         }
@@ -400,9 +460,17 @@ export class WorldManager {
             groundY,
             (m) => this.registerPickupRock(m)
         );
+        const pickupSticks = createPickupSticksForChunk(
+            this.scene,
+            this.chunkSize,
+            cx,
+            cz,
+            groundY,
+            (m) => this.registerPickupStick(m)
+        );
         const boulders = createBouldersForChunk(this.scene, this.chunkSize, cx, cz, groundY);
 
-        this.chunks.set(key, {
+        const chunkData = {
             mesh,
             heights,
             cx,
@@ -410,9 +478,52 @@ export class WorldManager {
             objects: chunkTrees,
             grass,
             pickupRocks,
+            pickupSticks,
             boulders
+        };
+        this.chunks.set(key, chunkData);
+
+        pickupRocks.forEach((m) => {
+            m.position.y = this.getHeightAt(m.position.x, m.position.z) + 0.16;
         });
+        pickupSticks.forEach((m) => {
+            m.position.y = this.getHeightAt(m.position.x, m.position.z) + 0.09;
+        });
+        boulders.forEach((m) => {
+            const gy = this.getHeightAt(m.position.x, m.position.z);
+            const sc = m.scale.x;
+            m.position.y = gy + sc * 0.52;
+        });
+
+        if (grass) {
+            this.applyLakeGrassToChunkIfNeeded(chunkData);
+        }
+
         return key;
+    }
+
+    applyLakeGrassToChunkIfNeeded(chunk) {
+        if (!chunk.grass) return;
+        const { cx, cz } = chunk;
+        const ccx = cx * this.chunkSize + this.chunkSize * 0.5;
+        const ccz = cz * this.chunkSize + this.chunkSize * 0.5;
+        if (Math.hypot(ccx - LAKE_CX, ccz - LAKE_CZ) > 54) return;
+
+        this.scene.remove(chunk.grass);
+        const { count, matrices } = computeGrassInstanceMatricesWithHeight(
+            this.chunkSize,
+            cx,
+            cz,
+            (wx, wz) => this.getHeightAt(wx, wz)
+        );
+        const grass = buildGrassInstancedMeshFromMatrices(
+            this.grassGeometry,
+            this.grassMaterial,
+            matrices,
+            count
+        );
+        this.scene.add(grass);
+        chunk.grass = grass;
     }
 
     registerPickupRock(mesh) {
@@ -424,6 +535,168 @@ export class WorldManager {
     unregisterPickupRock(mesh) {
         const i = this.pickupRocks.indexOf(mesh);
         if (i >= 0) this.pickupRocks.splice(i, 1);
+    }
+
+    registerPickupStick(mesh) {
+        if (!mesh || !mesh.userData.pickupStick) return;
+        if (this.pickupSticks.includes(mesh)) return;
+        this.pickupSticks.push(mesh);
+    }
+
+    unregisterPickupStick(mesh) {
+        const i = this.pickupSticks.indexOf(mesh);
+        if (i >= 0) this.pickupSticks.splice(i, 1);
+    }
+
+    tryMeleeAxeHit(playerPos, forwardXZ) {
+        if (!playerPos || !forwardXZ) return;
+        const f = forwardXZ.clone();
+        f.y = 0;
+        if (f.lengthSq() < 1e-8) return;
+        f.normalize();
+
+        const reach = 4.2;
+        const minDot = 0.36;
+        let best = null;
+        let bestD = Infinity;
+
+        this.chunks.forEach((chunk) => {
+            if (!chunk.objects) return;
+            for (let o = 0; o < chunk.objects.length; o++) {
+                const tree = chunk.objects[o];
+                if (!tree.userData?.meshyTree) continue;
+                if (tree.userData.treePhase !== 'standing') continue;
+                tree.updateMatrixWorld(true);
+                const box = new THREE.Box3().setFromObject(tree);
+                const c = new THREE.Vector3();
+                box.getCenter(c);
+                const dx = c.x - playerPos.x;
+                const dz = c.z - playerPos.z;
+
+                const dist = Math.hypot(dx, dz);
+                if (dist > reach || dist < 0.08) continue;
+                const toTree = new THREE.Vector3(dx, 0, dz).normalize();
+                if (f.dot(toTree) < minDot) continue;
+                if (dist < bestD) {
+                    bestD = dist;
+                    best = tree;
+                }
+            }
+        });
+        if (best) {
+            this.applyTreeChop(best);
+        }
+    }
+
+    tryAxeHitTree(axePos, hitSet) {
+        if (!axePos || !hitSet) return;
+        this.chunks.forEach((chunk) => {
+            if (!chunk.objects) return;
+            for (let o = 0; o < chunk.objects.length; o++) {
+                const tree = chunk.objects[o];
+                if (!tree.userData?.meshyTree) continue;
+                if (hitSet.has(tree.uuid)) continue;
+
+                tree.updateMatrixWorld(true);
+                if (tree.userData.treePhase !== 'standing') continue;
+                const box = new THREE.Box3().setFromObject(tree);
+                const center = new THREE.Vector3();
+                const size = new THREE.Vector3();
+                box.getCenter(center);
+                box.getSize(size);
+
+                const horiz = Math.hypot(axePos.x - center.x, axePos.z - center.z);
+                const maxR = Math.max(size.x, size.z) * 0.42 + 0.75;
+                if (horiz > maxR) continue;
+                if (axePos.y < box.min.y - 2.0 || axePos.y > box.max.y + 3.0) continue;
+
+                hitSet.add(tree.uuid);
+                this.applyTreeChop(tree);
+            }
+        });
+    }
+
+    applyTreeChop(tree) {
+        if (!tree.userData?.meshyTree) return;
+        if (tree.userData.treePhase !== 'standing') return;
+        tree.userData.chopStandingHits = (tree.userData.chopStandingHits || 0) + 1;
+        if (tree.userData.chopStandingHits >= 3) {
+            this.replaceTreeWithChoppableLog(tree);
+        }
+    }
+
+    replaceTreeWithChoppableLog(tree) {
+        const x = tree.position.x;
+        const z = tree.position.z;
+        this.removeTreeFromChunks(tree);
+        this.spawnChoppableLogAt(x, z);
+    }
+
+    spawnChoppableLogAt(x, z) {
+        const gy = this.getHeightAt(x, z);
+        const geo = new THREE.CylinderGeometry(0.34, 0.42, 2.45, 10);
+        const mat = new THREE.MeshStandardMaterial({
+            color: 0x4a3218,
+            roughness: 0.92,
+            metalness: 0.05,
+            flatShading: true,
+            emissive: new THREE.Color(0x000000),
+            emissiveIntensity: 0
+        });
+        const log = new THREE.Mesh(geo, mat);
+        log.rotation.z = Math.PI / 2;
+        log.rotation.y = Math.random() * Math.PI * 2;
+        log.position.set(x, gy + 0.26, z);
+        log.castShadow = true;
+        log.receiveShadow = true;
+        log.userData.interactiveLog = true;
+        log.userData.highlightEmissive = new THREE.Color(0xe8b868);
+        this.scene.add(log);
+        this.choppableLogs.push(log);
+    }
+
+    breakLogIntoSticks(log) {
+        const i = this.choppableLogs.indexOf(log);
+        if (i >= 0) this.choppableLogs.splice(i, 1);
+
+        const x = log.position.x;
+        const z = log.position.z;
+        this.scene.remove(log);
+        log.geometry?.dispose();
+        if (log.material && typeof log.material.dispose === 'function') {
+            log.material.dispose();
+        }
+
+        const n = 8;
+        for (let k = 0; k < n; k++) {
+            const ang = (k / n) * Math.PI * 2 + Math.random() * 0.4;
+            const r = 0.65 + Math.random() * 0.55;
+            const sx = x + Math.cos(ang) * r;
+            const sz = z + Math.sin(ang) * r;
+            const sgy = this.getHeightAt(sx, sz);
+            const len = 1.15 + Math.random() * 0.85;
+            const geo = new THREE.CylinderGeometry(0.052, 0.072, len, 7);
+            const mesh = new THREE.Mesh(geo, createStickWoodMaterial());
+            mesh.rotation.z = Math.PI / 2;
+            mesh.rotation.y = Math.random() * Math.PI * 2;
+            mesh.position.set(sx, sgy + 0.09, sz);
+            mesh.castShadow = true;
+            mesh.receiveShadow = true;
+            mesh.userData.pickupStick = true;
+            mesh.userData.restScale = 1;
+            mesh.userData.highlightEmissive = new THREE.Color(0x7a5a2a);
+            this.scene.add(mesh);
+            this.registerPickupStick(mesh);
+        }
+    }
+
+    removeTreeFromChunks(tree) {
+        this.scene.remove(tree);
+        this.chunks.forEach((chunk) => {
+            if (!chunk.objects) return;
+            const i = chunk.objects.indexOf(tree);
+            if (i >= 0) chunk.objects.splice(i, 1);
+        });
     }
 
     updateDecorationTime(elapsedSeconds) {
@@ -439,6 +712,7 @@ export class WorldManager {
             if (!chunk.objects) return;
             chunk.objects.forEach((obj) => {
                 if (!obj.userData?.meshyTree) return;
+                if (obj.userData.treePhase && obj.userData.treePhase !== 'standing') return;
                 const ph = obj.userData.windPhase ?? 0;
                 const s = 0.85;
                 obj.rotation.y = obj.userData.baseRotY ?? obj.rotation.y;
@@ -486,6 +760,68 @@ export class WorldManager {
                 m.emissiveIntensity = boost;
             }
         }
+
+        const sticks = this.pickupSticks;
+        for (let i = 0; i < sticks.length; i++) {
+            const mesh = sticks[i];
+            if (!mesh.parent || !mesh.material) continue;
+            const dx = mesh.position.x - px;
+            const dz = mesh.position.z - pz;
+            const dist = Math.sqrt(dx * dx + dz * dz);
+            let k = 0;
+            if (dist <= inner) {
+                k = 1;
+            } else if (dist < outer) {
+                const t = (outer - dist) / (outer - inner);
+                k = t * t * (3 - 2 * t);
+            }
+            const pulse =
+                0.12 * Math.sin(elapsedSeconds * 5.8 + mesh.position.x * 0.17 + mesh.position.z * 0.14);
+            const m = mesh.material;
+            const tint = mesh.userData.highlightEmissive;
+            const boost = THREE.MathUtils.clamp(k * 0.85 + pulse * k, 0, 1.25);
+            if (boost < 0.008) {
+                m.emissive.setHex(0x000000);
+                m.emissiveIntensity = 0;
+            } else if (tint) {
+                m.emissive.copy(tint);
+                m.emissiveIntensity = boost;
+            } else {
+                m.emissive.setHex(0x7a5a2a);
+                m.emissiveIntensity = boost;
+            }
+        }
+
+        const logs = this.choppableLogs;
+        for (let i = 0; i < logs.length; i++) {
+            const mesh = logs[i];
+            if (!mesh.parent || !mesh.material) continue;
+            const dx = mesh.position.x - px;
+            const dz = mesh.position.z - pz;
+            const dist = Math.sqrt(dx * dx + dz * dz);
+            let k = 0;
+            if (dist <= inner) {
+                k = 1;
+            } else if (dist < outer) {
+                const t = (outer - dist) / (outer - inner);
+                k = t * t * (3 - 2 * t);
+            }
+            const pulse =
+                0.18 * Math.sin(elapsedSeconds * 5.5 + mesh.position.x * 0.14 + mesh.position.z * 0.14);
+            const m = mesh.material;
+            const tint = mesh.userData.highlightEmissive;
+            const boost = THREE.MathUtils.clamp(k * 1.05 + pulse * k, 0, 1.55);
+            if (boost < 0.008) {
+                m.emissive.setHex(0x000000);
+                m.emissiveIntensity = 0;
+            } else if (tint) {
+                m.emissive.copy(tint);
+                m.emissiveIntensity = boost;
+            } else {
+                m.emissive.setHex(0xe8b868);
+                m.emissiveIntensity = boost;
+            }
+        }
     }
 
     update(playerPosition) {
@@ -513,7 +849,10 @@ export class WorldManager {
         if (this.water) {
             this._waterAcc = (this._waterAcc || 0) + 1;
             if (this._waterAcc % 2 === 0) {
-                this.water.material.uniforms['time'].value += 1.0 / 30.0;
+                const t = (this.water.material.uniforms['time'].value += 1.0 / 30.0);
+                if (this.lakeWater) {
+                    this.lakeWater.material.uniforms['time'].value = t;
+                }
             }
         }
     }
@@ -522,10 +861,8 @@ export class WorldManager {
         const cx = Math.floor(x / this.chunkSize);
         const cz = Math.floor(z / this.chunkSize);
         const chunk = this.chunks.get(`${cx},${cz}`);
-        if (chunk && chunk.mesh) {
-            return chunk.mesh.position.y;
-        }
-        return 0;
+        const base = chunk && chunk.mesh ? chunk.mesh.position.y : 0;
+        return base + sampleLakeDepth(x, z);
     }
 
     save() {
@@ -553,6 +890,15 @@ export class WorldManager {
             this.initChunkWorker();
         }
 
+        this.choppableLogs.forEach((log) => {
+            this.scene.remove(log);
+            log.geometry?.dispose();
+            if (log.material && typeof log.material.dispose === 'function') {
+                log.material.dispose();
+            }
+        });
+        this.choppableLogs.length = 0;
+
         this.chunks.forEach(c => {
             this.scene.remove(c.mesh);
             if (c.objects) {
@@ -577,8 +923,19 @@ export class WorldManager {
                     }
                 });
             }
+            if (c.pickupSticks) {
+                c.pickupSticks.forEach((s) => {
+                    this.unregisterPickupStick(s);
+                    this.scene.remove(s);
+                    s.geometry?.dispose();
+                    if (s.material && typeof s.material.dispose === 'function') {
+                        s.material.dispose();
+                    }
+                });
+            }
         });
         this.pickupRocks.length = 0;
+        this.pickupSticks.length = 0;
         this.chunks.clear();
 
         const data = JSON.parse(json);

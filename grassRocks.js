@@ -3,8 +3,18 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { computeGrassInstanceMatrices, hashChunk, mulberry32, BLADE_TARGET } from './chunkGenShared.js';
 
 const PICKUP_ROCKS_PER_CHUNK = 4;
+const PICKUP_STICKS_PER_CHUNK = 6;
 const BOULDER_CHANCE = 0.5;
 const BOULDERS_MAX_PER_CHUNK = 2;
+
+export function createStickWoodMaterial() {
+    return new THREE.MeshStandardMaterial({
+        color: 0x5c3f24,
+        roughness: 0.91,
+        metalness: 0.04,
+        flatShading: true
+    });
+}
 
 export { BLADE_TARGET };
 
@@ -122,6 +132,35 @@ export function createPickupRocksForChunk(scene, chunkSize, cx, cz, groundY, reg
         mesh.userData.highlightEmissive = new THREE.Color(0x4a6aa8);
         scene.add(mesh);
         registerPickup(mesh);
+        meshes.push(mesh);
+    }
+    return meshes;
+}
+
+export function createPickupSticksForChunk(scene, chunkSize, cx, cz, groundY, registerStick) {
+    const rng = mulberry32(hashChunk(cx, cz) ^ 0x6a09e667);
+    const meshes = [];
+    const originX = cx * chunkSize;
+    const originZ = cz * chunkSize;
+    const half = chunkSize * 0.48;
+
+    for (let i = 0; i < PICKUP_STICKS_PER_CHUNK; i++) {
+        if (rng() < 0.1) continue;
+        const lx = (rng() - 0.5) * 2 * half;
+        const lz = (rng() - 0.5) * 2 * half;
+        const len = 1.45 + rng() * 0.95;
+        const geo = new THREE.CylinderGeometry(0.055 + rng() * 0.02, 0.075 + rng() * 0.025, len, 7);
+        const mesh = new THREE.Mesh(geo, createStickWoodMaterial());
+        mesh.rotation.z = Math.PI / 2;
+        mesh.rotation.y = rng() * Math.PI * 2;
+        mesh.position.set(originX + lx, groundY + 0.09, originZ + lz);
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        mesh.userData.pickupStick = true;
+        mesh.userData.restScale = 1;
+        mesh.userData.highlightEmissive = new THREE.Color(0x7a5a2a);
+        scene.add(mesh);
+        registerStick(mesh);
         meshes.push(mesh);
     }
     return meshes;

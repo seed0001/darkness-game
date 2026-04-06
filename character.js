@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
+import { LAKE_CX, LAKE_CZ } from './world.js';
 
 const MODEL_PATH = '/models/hillbilly/';
 const FILE_PREFIX = 'Meshy_AI_t_pose_of_a_hillbilly_biped_';
@@ -22,7 +23,12 @@ export class Character {
         
         this.rightHand = null;
         this.heldRock = null;
+        this.heldStick = null;
         this.heightWorld = 1.65;
+
+        /** Lying face-down at the lake (E to toggle when near water). */
+        this.lyingProne = false;
+        this.proneBellyClearance = 0.14;
 
         this.readyPromise = this.load();
     }
@@ -110,7 +116,27 @@ export class Character {
         }
     }
 
+    setLyingProne(down) {
+        if (!this.isLoaded || !this.model) return;
+        if (down === this.lyingProne) return;
+        if (down) {
+            const p = this.position;
+            this.targetRotation = Math.atan2(LAKE_CX - p.x, LAKE_CZ - p.z);
+            this.rotation = this.targetRotation;
+            this.setState('idle');
+            this.lyingProne = true;
+        } else {
+            this.lyingProne = false;
+            this.model.rotation.x = 0;
+        }
+    }
+
+    isLyingProne() {
+        return this.lyingProne;
+    }
+
     setState(newState) {
+        if (this.lyingProne) return;
         if (!this.isLoaded || newState === this.currentState) return;
         if (!this.animations[newState]) return;
 
@@ -166,7 +192,7 @@ export class Character {
     }
 
     attachHeldRock(mesh) {
-        if (!this.isLoaded || !mesh || this.heldRock) return false;
+        if (!this.isLoaded || !mesh || this.heldRock || this.heldStick) return false;
         this.heldRock = mesh;
         mesh.removeFromParent();
         const rest = mesh.userData.restScale ?? mesh.scale.x;
@@ -190,6 +216,64 @@ export class Character {
             mesh.material.emissiveIntensity = 0;
         }
         return true;
+    }
+
+    getHeldStick() {
+        return this.heldStick;
+    }
+
+    attachHeldStick(mesh) {
+        if (!this.isLoaded || !mesh || this.heldStick || this.heldRock) return false;
+        if (!mesh.userData.pickupStick) return false;
+        this.heldStick = mesh;
+        mesh.removeFromParent();
+        const rest = mesh.userData.restScale ?? mesh.scale.x;
+        const inHand = rest * 0.42;
+        if (this.rightHand) {
+            this.rightHand.add(mesh);
+            mesh.position.set(0.06, 0.12, 0.04);
+            mesh.rotation.set(0.15, 0.55, 1.25);
+            mesh.scale.setScalar(inHand);
+        } else if (this.model) {
+            this.model.add(mesh);
+            mesh.position.set(0.38, 1.1, 0.15);
+            mesh.rotation.set(0.2, 0.4, 1.1);
+            mesh.scale.setScalar(inHand);
+        } else {
+            this.heldStick = null;
+            return false;
+        }
+        if (mesh.material) {
+            mesh.material.emissive.setHex(0x000000);
+            mesh.material.emissiveIntensity = 0;
+        }
+        return true;
+    }
+
+    dropHeldStick(scene, world, camera) {
+        if (!this.isLoaded || !this.heldStick || !scene || !world) return null;
+        const mesh = this.heldStick;
+        this.heldStick = null;
+        mesh.removeFromParent();
+        const rest = mesh.userData.restScale ?? 1;
+        mesh.scale.setScalar(rest);
+
+        const forward = new THREE.Vector3(0, 0, -1);
+        if (camera) forward.applyQuaternion(camera.quaternion);
+        forward.y = 0;
+        if (forward.lengthSq() < 1e-6) forward.set(0, 0, -1);
+        else forward.normalize();
+
+        const p = this.position.clone().addScaledVector(forward, 1.05);
+        p.y = world.getHeightAt(p.x, p.z) + 0.14;
+        mesh.position.copy(p);
+        mesh.rotation.set(
+            Math.PI / 2 + (Math.random() - 0.5) * 0.15,
+            this.rotation + (Math.random() - 0.5) * 0.4,
+            (Math.random() - 0.5) * 0.2
+        );
+        scene.add(mesh);
+        return mesh;
     }
 
     dropHeldRock(scene, world, camera) {
@@ -225,20 +309,32 @@ export class Character {
             this.mixer.update(delta);
         }
 
+        if (this.lyingProne) {
+            if (terrainManager) {
+                const terrainHeight = terrainManager.getHeightAt(this.position.x, this.position.z);
+                this.position.y = terrainHeight + this.proneBellyClearance;
+            }
+            this.model.rotation.y = this.rotation;
+            this.model.rotation.x = Math.PI / 2 * 0.97;
+            this.model.position.copy(this.position);
+            return;
+        }
+
         const rotationSpeed = 10;
         let rotationDiff = this.targetRotation - this.rotation;
-        
+
         while (rotationDiff > Math.PI) rotationDiff -= Math.PI * 2;
         while (rotationDiff < -Math.PI) rotationDiff += Math.PI * 2;
-        
+
         this.rotation += rotationDiff * Math.min(1, rotationSpeed * delta);
         this.model.rotation.y = this.rotation;
+        this.model.rotation.x = 0;
 
         if (terrainManager) {
             const terrainHeight = terrainManager.getHeightAt(this.position.x, this.position.z);
             this.position.y = terrainHeight;
         }
-        
+
         this.model.position.copy(this.position);
     }
 }

@@ -62,3 +62,44 @@ export function computeGrassInstanceMatrices(chunkSize, cx, cz, groundY, bladeTa
 
     return { count: placed, matrices };
 }
+
+/**
+ * Same as computeGrassInstanceMatrices but uses getHeightAt(wx, wz) per blade (terrain / lake).
+ */
+export function computeGrassInstanceMatricesWithHeight(chunkSize, cx, cz, getHeightAt, bladeTarget = BLADE_TARGET) {
+    const rng = mulberry32(hashChunk(cx, cz));
+    const originX = cx * chunkSize;
+    const originZ = cz * chunkSize;
+    const half = chunkSize * 0.5;
+    const matrices = new Float32Array(bladeTarget * 16);
+
+    let placed = 0;
+    let tries = 0;
+    const maxTries = bladeTarget * 10;
+
+    while (placed < bladeTarget && tries < maxTries) {
+        tries++;
+        const lx = (rng() - 0.5) * 2 * half;
+        const lz = (rng() - 0.5) * 2 * half;
+        const wx = originX + lx;
+        const wz = originZ + lz;
+        const n = noise2(wx * 0.015, wz * 0.015);
+        if (n < 0.012) continue;
+        if (n < 0.12 && rng() > 0.62) continue;
+
+        const y = getHeightAt(wx, wz);
+        if (y < -0.06) continue;
+
+        _pos.set(wx, y, wz);
+        _euler.set((rng() - 0.5) * 0.2, rng() * Math.PI * 2, (rng() - 0.5) * 0.16, 'XYZ');
+        _quat.setFromEuler(_euler);
+        const s = 0.78 + rng() * 0.68;
+        const sy = s * (0.94 + rng() * 0.26);
+        _scale.set(s, sy, s);
+        _mat.compose(_pos, _quat, _scale);
+        _mat.toArray(matrices, placed * 16);
+        placed++;
+    }
+
+    return { count: placed, matrices };
+}

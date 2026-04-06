@@ -26,6 +26,13 @@ export class ThrowingAxe {
         this.dogRetrieving = false;
         
         this.character = null;
+        this.flightHitTreeIds = new Set();
+
+        this.swingProgress = 0;
+        this.swingDuration = 0.38;
+        this.swingCooldown = 0;
+        this.meleeImpactFired = false;
+        this.onMeleeImpact = null;
 
         this.readyPromise = this.load();
     }
@@ -77,6 +84,15 @@ export class ThrowingAxe {
         this.handBone = handBone;
     }
 
+    startSwing() {
+        if (this.state !== 'held' || !this.isLoaded) return false;
+        if (this.swingCooldown > 0) return false;
+        this.state = 'swinging';
+        this.swingProgress = 0;
+        this.meleeImpactFired = false;
+        return true;
+    }
+
     throw(direction, playerPos) {
         if (this.state !== 'held' || !this.isLoaded) return false;
         
@@ -89,7 +105,8 @@ export class ThrowingAxe {
         
         this.groundTimer = 0;
         this.dogRetrieving = false;
-        
+        this.flightHitTreeIds.clear();
+
         return true;
     }
 
@@ -134,7 +151,11 @@ export class ThrowingAxe {
     update(delta, terrainManager, characterPosition, characterRotation) {
         if (!this.isLoaded || !this.model) return;
 
-        if (this.state === 'held') {
+        if (this.swingCooldown > 0) {
+            this.swingCooldown -= delta;
+        }
+
+        if (this.state === 'held' || this.state === 'swinging') {
             let handPos = null;
             
             if (this.character && this.character.getRightHandWorldPosition) {
@@ -167,6 +188,26 @@ export class ThrowingAxe {
                 
                 this.model.position.copy(pos);
                 this.model.rotation.set(Math.PI / 2, characterRotation, 0);
+            }
+
+            if (this.state === 'swinging') {
+                this.swingProgress += delta;
+                const impactAt = 0.12;
+                if (!this.meleeImpactFired && this.swingProgress >= impactAt) {
+                    this.meleeImpactFired = true;
+                    if (typeof this.onMeleeImpact === 'function') {
+                        this.onMeleeImpact();
+                    }
+                }
+                const t = Math.min(1, this.swingProgress / this.swingDuration);
+                const chop = Math.sin(t * Math.PI);
+                this.model.rotateY(-chop * 1.35);
+                this.model.rotateZ(chop * 0.55);
+
+                if (this.swingProgress >= this.swingDuration) {
+                    this.state = 'held';
+                    this.swingCooldown = 0.22;
+                }
             }
             
         } else if (this.state === 'flying') {

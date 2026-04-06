@@ -1,9 +1,9 @@
 import * as THREE from 'three';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
-import { WorldManager } from './world.js';
+import { WorldManager, isNearLakeWater } from './world.js';
 import { Controls } from './controls.js';
 import { SkyDome } from './sky.js';
-import { Tank } from './tank.js';
+import { Dog } from './dog.js';
 import { Character } from './character.js';
 import { ChickenSpawner } from './chicken.js';
 import { ButterflySpawner } from './butterfly.js';
@@ -43,7 +43,7 @@ class Game {
         this.controls = new Controls(this.camera, this.renderer.domElement, this.character);
         
         this.sky = new SkyDome(this.scene);
-        this.tank = new Tank(this.scene);
+        this.dog = new Dog(this.scene);
         
         const getPlayerPos = () => this.character.isLoaded ? this.character.getPosition() : new THREE.Vector3(0, 0, 0);
         
@@ -57,9 +57,30 @@ class Game {
         };
         this.axe = new ThrowingAxe(this.scene, getPlayerPos, getPlayerDir);
         this.axe.setCharacter(this.character);
+        this.axe.onMeleeImpact = () => {
+            if (!this.character.isLoaded) return;
+            const forward = new THREE.Vector3(0, 0, -1);
+            forward.applyQuaternion(this.camera.quaternion);
+            this.world.tryMeleeAxeHit(this.character.getPosition(), forward);
+        };
 
         this.fireManager = new FireManager(this.scene, this.listener);
-        
+
+        this.rockRing = [];
+        this.fireRingCenter = null;
+        this.fireRingRadius = 2.2;
+        this.fireRingPreviewGroup = null;
+        this.fireRingPreviewMaterials = [];
+        this.fireRingPreviewLight = null;
+        this._helpTimeout = null;
+
+        this.awaitingSticks = false;
+        this.stickPit = [];
+        this.firePitInnerRadius = 1.9;
+
+        this.raycaster = new THREE.Raycaster();
+        this.ndcCenter = new THREE.Vector2(0, 0);
+
         this.bullets = [];
         this.bulletGeometry = new THREE.SphereGeometry(0.15, 8, 8);
         this.bulletMaterial = new THREE.MeshBasicMaterial({ color: 0xffff00 });
@@ -109,7 +130,7 @@ class Game {
                     console.warn('Character load issue — using default height for tree scale.', err);
                 }),
                 this.axe.readyPromise.catch((err) => console.warn('Axe load:', err)),
-                this.tank.readyPromise.catch((err) => console.warn('Tank load:', err)),
+                this.dog.readyPromise.catch((err) => console.warn('Dog load:', err)),
                 this.ambientWind.bufferPromise,
                 preloadFireMedia(),
                 new FBXLoader().loadAsync('/models/butterfly.fbx').catch(() => {}),
@@ -206,9 +227,6 @@ class Game {
             if (e.key.toLowerCase() === 'l') {
                 this.toggleFlashlight(!this.flashlightOn);
             }
-            if (e.key.toLowerCase() === 'f') {
-                this.spawnFire();
-            }
             if (e.key === '1') {
                 this.isDay = !this.isDay;
                 this.targetDayPhase = this.isDay ? 1.0 : 0.0;
@@ -216,8 +234,12 @@ class Game {
 
             if (e.repeat) return;
 
+            if (e.key.toLowerCase() === 'q') {
+                this.throwAxe();
+            }
+
             if (e.key.toLowerCase() === 'e') {
-                this.tryPickupOrDropRock();
+                this.tryLyingProneOrPickup();
             }
 
             const playerPos = this.character.isLoaded
@@ -239,63 +261,424 @@ class Game {
             if (!this.controls.isLocked) return;
             
             if (e.button === 0) {
-                this.throwAxe();
+                if (this.tryClickChoppableLog()) return;
+                this.swingAxe();
             }
         });
 
         window.addEventListener('contextmenu', (e) => e.preventDefault());
     }
 
+    tryClickChoppableLog() {
+        if (!this.character.isLoaded || !this.world.choppableLogs.length) return false;
+        this.raycaster.setFromCamera(this.ndcCenter, this.camera);
+        const hits = this.raycaster.intersectObjects(this.world.choppableLogs, false);
+        if (hits.length === 0) return false;
+        const log = hits[0].object;
+        if (!log.userData?.interactiveLog) return false;
+        const p = this.character.getPosition();
+        if (p.distanceTo(log.position) > 5.8) return false;
+        this.world.breakLogIntoSticks(log);
+        return true;
+    }
+
+    swingAxe() {
+        if (!this.character.isLoaded || !this.axe) return;
+        if (this.character.isLyingProne()) return;
+        this.axe.startSwing();
+    }
+
     throwAxe() {
         if (!this.character.isLoaded || !this.axe) return;
-        
+        if (this.character.isLyingProne()) return;
+
         const charPos = this.character.getPosition();
         const direction = new THREE.Vector3(0, 0, -1);
         direction.applyQuaternion(this.camera.quaternion);
-        
+
         this.axe.throw(direction, charPos);
+    }
+
+    tryLyingProneOrPickup() {
+        if (!this.character.isLoaded) return;
+
+        if (this.character.isLyingProne()) {
+            this.character.setLyingProne(false);
+            return;
+        }
+
+        const p = this.character.getPosition();
+        if (isNearLakeWater(p.x, p.z)) {
+            if (this.character.getHeldRock() || this.character.getHeldStick()) {
+                this.showHelpPopup('Drop what you are holding first to lie down by the water.', 3200);
+                return;
+            }
+            this.character.setLyingProne(true);
+            return;
+        }
+
+        this.tryPickupOrDropRock();
     }
 
     tryPickupOrDropRock() {
         if (!this.character.isLoaded) return;
-        if (this.character.getHeldRock()) {
-            const mesh = this.character.dropHeldRock(this.scene, this.world, this.camera);
-            if (mesh && mesh.userData.pickupRock) {
-                this.world.registerPickupRock(mesh);
+
+        if (this.character.getHeldStick()) {
+            const mesh = this.character.dropHeldStick(this.scene, this.world, this.camera);
+            if (mesh && mesh.userData.pickupStick) {
+                if (
+                    this.awaitingSticks &&
+                    this.stickPit.length < 5 &&
+                    this.fireRingCenter
+                ) {
+                    const dx = mesh.position.x - this.fireRingCenter.x;
+                    const dz = mesh.position.z - this.fireRingCenter.z;
+                    if (Math.hypot(dx, dz) > this.firePitInnerRadius) {
+                        this.showHelpPopup(
+                            'Place the stick in the fire pit — stand in the center of the rock ring and drop (E).',
+                            4200
+                        );
+                        this.world.registerPickupStick(mesh);
+                        return;
+                    }
+                    this.stickPit.push(mesh);
+                    this.positionStickInFirePit(mesh, this.stickPit.length - 1);
+                    this.updateFirePitHud();
+                    this.showHelpPopup(
+                        this.stickPit.length < 5
+                            ? `Stick in the pit — ${this.stickPit.length} / 5`
+                            : null
+                    );
+                    if (this.stickPit.length === 5) {
+                        this.completeFirePitAndIgnite();
+                    }
+                    return;
+                }
+                this.world.registerPickupStick(mesh);
             }
             return;
         }
+
+        if (this.character.getHeldRock()) {
+            const mesh = this.character.dropHeldRock(this.scene, this.world, this.camera);
+            if (mesh && mesh.userData.pickupRock) {
+                // Check if this rock is being placed in a ring
+                if (this.rockRing.length < 10) {
+                    this.rockRing.push(mesh);
+                    if (this.rockRing.length === 1) {
+                        const p = this.character.getPosition();
+                        this.fireRingCenter = new THREE.Vector3(
+                            p.x,
+                            this.world.getHeightAt(p.x, p.z),
+                            p.z
+                        );
+                        this.ensureFireRingPreview();
+                    }
+                    this.addRockPlacementShadow(mesh);
+                    this.updateFirePitHud();
+                    this.showHelpPopup(
+                        this.rockRing.length < 10
+                            ? `Rock placed! ${this.rockRing.length}/10 — ring marks where the fire will be.`
+                            : null
+                    );
+                    if (this.rockRing.length === 10) {
+                        this.arrangeRockRing();
+                    }
+                } else {
+                    this.world.registerPickupRock(mesh);
+                }
+            }
+            return;
+        }
+
         const pos = this.character.getPosition();
         let best = null;
         let bestD = 2.9;
-        const list = this.world.pickupRocks;
-        for (let i = 0; i < list.length; i++) {
-            const mesh = list[i];
+        let bestIsRock = true;
+
+        const rocks = this.world.pickupRocks;
+        for (let i = 0; i < rocks.length; i++) {
+            const mesh = rocks[i];
             if (!mesh.parent) continue;
             const d = pos.distanceTo(mesh.position);
             if (d < bestD) {
                 bestD = d;
                 best = mesh;
+                bestIsRock = true;
             }
         }
+        const sticks = this.world.pickupSticks;
+        for (let i = 0; i < sticks.length; i++) {
+            const mesh = sticks[i];
+            if (!mesh.parent) continue;
+            const d = pos.distanceTo(mesh.position);
+            if (d < bestD) {
+                bestD = d;
+                best = mesh;
+                bestIsRock = false;
+            }
+        }
+
         if (best) {
-            this.world.unregisterPickupRock(best);
-            this.character.attachHeldRock(best);
+            if (bestIsRock) {
+                this.world.unregisterPickupRock(best);
+                this.character.attachHeldRock(best);
+                const remaining = 10 - this.rockRing.length;
+                this.showHelpPopup(`Rock picked up! Need ${remaining} more to build a fire ring.`);
+            } else {
+                this.world.unregisterPickupStick(best);
+                this.character.attachHeldStick(best);
+                if (this.awaitingSticks) {
+                    const need = 5 - this.stickPit.length;
+                    this.showHelpPopup(
+                        `Stick picked up. Place ${need} stick${need !== 1 ? 's' : ''} in the fire pit (center of the ring).`
+                    );
+                } else {
+                    this.showHelpPopup(
+                        'Stick picked up. Need wood? Melee a tree 3× → log → left-click to split into sticks.'
+                    );
+                }
+            }
+        } else {
+            this.showHelpPopup('Nothing to pick up nearby. Find a rock or stick and press E.');
         }
     }
 
-    spawnFire() {
-        if (!this.character.isLoaded) return;
-        
-        const charPos = this.character.getPosition();
-        const direction = new THREE.Vector3(0, 0, -1);
-        direction.applyQuaternion(this.camera.quaternion);
-        
-        const firePos = charPos.clone();
-        firePos.addScaledVector(direction, 5);
-        firePos.y = this.world.getHeightAt(firePos.x, firePos.z) + 0.08;
+    ensureFireRingPreview() {
+        if (!this.fireRingCenter || this.fireRingPreviewGroup) return;
 
+        const r = this.fireRingRadius;
+        const g = new THREE.Group();
+
+        const innerGeo = new THREE.CircleGeometry(r * 0.82, 40);
+        const innerMat = new THREE.MeshBasicMaterial({
+            color: 0x060504,
+            transparent: true,
+            opacity: 0.62,
+            depthWrite: false
+        });
+        const inner = new THREE.Mesh(innerGeo, innerMat);
+        inner.rotation.x = -Math.PI / 2;
+        inner.position.y = 0.015;
+        inner.renderOrder = 1;
+        g.add(inner);
+
+        const ringGeo = new THREE.RingGeometry(r * 0.86, r * 1.08, 56);
+        const ringMat = new THREE.MeshStandardMaterial({
+            color: 0x141008,
+            emissive: 0x4a2810,
+            emissiveIntensity: 0.32,
+            roughness: 0.94,
+            metalness: 0.06,
+            transparent: true,
+            opacity: 0.88,
+            side: THREE.DoubleSide,
+            depthWrite: false
+        });
+        const ring = new THREE.Mesh(ringGeo, ringMat);
+        ring.rotation.x = -Math.PI / 2;
+        ring.position.y = 0.03;
+        ring.renderOrder = 2;
+        g.add(ring);
+
+        const light = new THREE.PointLight(0xff9030, 0.38, 18, 2);
+        light.position.set(0, 0.55, 0);
+        g.add(light);
+
+        g.position.copy(this.fireRingCenter);
+        this.scene.add(g);
+        this.fireRingPreviewGroup = g;
+        this.fireRingPreviewMaterials = [ringMat];
+        this.fireRingPreviewLight = light;
+    }
+
+    addRockPlacementShadow(mesh) {
+        const gx = mesh.position.x;
+        const gz = mesh.position.z;
+        const gy = this.world.getHeightAt(gx, gz) + 0.028;
+        const geo = new THREE.CircleGeometry(0.52, 20);
+        const mat = new THREE.MeshBasicMaterial({
+            color: 0x000000,
+            transparent: true,
+            opacity: 0.5,
+            depthWrite: false
+        });
+        const shadow = new THREE.Mesh(geo, mat);
+        shadow.rotation.x = -Math.PI / 2;
+        shadow.position.set(gx, gy, gz);
+        shadow.renderOrder = 0;
+        this.scene.add(shadow);
+        mesh.userData.placementShadow = shadow;
+    }
+
+    arrangeRockRing() {
+        if (!this.character.isLoaded || !this.fireRingCenter) return;
+
+        const center = this.fireRingCenter.clone();
+        center.y = this.world.getHeightAt(center.x, center.z);
+        const radius = this.fireRingRadius;
+
+        this.rockRing.forEach((mesh, i) => {
+            const angle = (i / 10) * Math.PI * 2;
+            const x = center.x + Math.cos(angle) * radius;
+            const z = center.z + Math.sin(angle) * radius;
+            const y = this.world.getHeightAt(x, z) + 0.16;
+            mesh.position.set(x, y, z);
+            mesh.rotation.set(mesh.rotation.x, angle, mesh.rotation.z);
+            if (!mesh.parent) this.scene.add(mesh);
+        });
+
+        this.clearRockPlacementShadowsOnly();
+        this.rockRing = [];
+        this.awaitingSticks = true;
+        this.stickPit = [];
+
+        this.updateFirePitHud();
+        this.showHelpPopup(
+            'Ring complete! Now you need sticks. Go find sticks or cut down a tree — place 5 sticks in the fire pit (stand in the ring center and press E to drop).',
+            10000
+        );
+    }
+
+    positionStickInFirePit(mesh, index) {
+        if (!this.fireRingCenter) return;
+        const center = this.fireRingCenter;
+        const angle = (index / 5) * Math.PI * 2 + 0.35;
+        const rad = 0.28 + index * 0.1;
+        const x = center.x + Math.cos(angle) * rad;
+        const z = center.z + Math.sin(angle) * rad;
+        const y = this.world.getHeightAt(x, z) + 0.1;
+        mesh.position.set(x, y, z);
+        mesh.rotation.set(Math.PI / 2 + 0.15, angle + 0.4, 0.12);
+    }
+
+    completeFirePitAndIgnite() {
+        for (let i = 0; i < this.stickPit.length; i++) {
+            const stick = this.stickPit[i];
+            this.scene.remove(stick);
+            stick.geometry?.dispose();
+            if (stick.material && typeof stick.material.dispose === 'function') {
+                stick.material.dispose();
+            }
+        }
+        this.stickPit = [];
+        const center = this.fireRingCenter
+            ? this.fireRingCenter.clone()
+            : new THREE.Vector3();
+        this.clearFireRingVisuals();
+        this.igniteFireAtRingCenter(center);
+        this.awaitingSticks = false;
+        this.fireRingCenter = null;
+        this.updateFirePitHud();
+        this.showHelpPopup('🔥 Fire lit!', 3500);
+    }
+
+    clearRockPlacementShadowsOnly() {
+        for (let i = 0; i < this.rockRing.length; i++) {
+            const mesh = this.rockRing[i];
+            const sh = mesh.userData.placementShadow;
+            if (sh) {
+                this.scene.remove(sh);
+                if (sh.geometry) sh.geometry.dispose();
+                if (sh.material) sh.material.dispose();
+                mesh.userData.placementShadow = null;
+            }
+        }
+    }
+
+    clearFireRingVisuals() {
+        this.clearRockPlacementShadowsOnly();
+
+        if (this.fireRingPreviewGroup) {
+            this.scene.remove(this.fireRingPreviewGroup);
+            this.fireRingPreviewGroup.traverse((obj) => {
+                if (obj.geometry) obj.geometry.dispose();
+                const m = obj.material;
+                if (m) {
+                    if (Array.isArray(m)) m.forEach((mat) => mat.dispose());
+                    else m.dispose();
+                }
+            });
+            this.fireRingPreviewGroup = null;
+        }
+        this.fireRingPreviewMaterials = [];
+        this.fireRingPreviewLight = null;
+    }
+
+    igniteFireAtRingCenter(centerVec) {
+        const c = centerVec || this.fireRingCenter;
+        if (!c) return;
+        const firePos = c.clone();
+        firePos.y = this.world.getHeightAt(firePos.x, firePos.z) + 0.08;
         this.fireManager.spawnFire(firePos);
+    }
+
+    updateFireRingPreviewPulse(elapsed) {
+        if (!this.fireRingPreviewMaterials.length) return;
+        const p = 0.26 + 0.1 * Math.sin(elapsed * 2.15);
+        this.fireRingPreviewMaterials[0].emissiveIntensity = p;
+        if (this.fireRingPreviewLight) {
+            this.fireRingPreviewLight.intensity = 0.3 + 0.14 * Math.sin(elapsed * 2.15);
+        }
+    }
+
+    showHelpPopup(message, duration = 3000) {
+        const el = document.getElementById('help-popup');
+        if (!el) return;
+        if (this._helpTimeout) clearTimeout(this._helpTimeout);
+        el.textContent = message;
+        el.classList.add('help-popup--visible');
+        this._helpTimeout = setTimeout(() => {
+            el.classList.remove('help-popup--visible');
+        }, duration);
+    }
+
+    updateFirePitHud() {
+        const el = document.getElementById('rock-counter');
+        const stickEl = document.getElementById('stick-counter');
+        const hud = document.getElementById('fire-ring-hud');
+        const fill = document.getElementById('fire-ring-progress-fill');
+        const bar = document.querySelector('.fire-ring-progress');
+        if (!el) return;
+
+        if (this.awaitingSticks) {
+            el.textContent = '✓ Rocks 10/10';
+            el.classList.add('rock-counter--complete');
+            if (stickEl) {
+                stickEl.hidden = false;
+                stickEl.textContent = `🪵 ${this.stickPit.length} / 5`;
+                stickEl.classList.toggle('stick-counter--complete', this.stickPit.length === 5);
+            }
+            if (fill) fill.style.width = `${(this.stickPit.length / 5) * 100}%`;
+            if (bar) {
+                bar.setAttribute('aria-valuemax', '5');
+                bar.setAttribute('aria-valuenow', String(this.stickPit.length));
+            }
+            if (hud) hud.classList.add('fire-ring-hud--visible');
+            return;
+        }
+
+        if (stickEl) {
+            stickEl.textContent = '';
+            stickEl.hidden = true;
+            stickEl.classList.remove('stick-counter--complete');
+        }
+
+        const count = this.rockRing.length;
+        if (count === 0) {
+            el.textContent = '';
+            el.classList.remove('rock-counter--complete');
+            if (fill) fill.style.width = '0%';
+        } else {
+            el.textContent = `🪨 ${count} / 10`;
+            if (fill) fill.style.width = `${(count / 10) * 100}%`;
+        }
+        el.classList.toggle('rock-counter--complete', count === 10);
+        if (bar) {
+            bar.setAttribute('aria-valuemax', '10');
+            bar.setAttribute('aria-valuenow', String(count));
+        }
+        if (hud) hud.classList.toggle('fire-ring-hud--visible', count > 0);
     }
 
     initPointerLock() {
@@ -307,6 +690,12 @@ class Game {
                 startScreen.style.display = 'none';
                 hud.style.display = 'flex';
                 this.toggleFlashlight(true);
+                setTimeout(() => {
+                    this.showHelpPopup(
+                        'Build a fire: 10 rocks in a ring (E), then 5 sticks in the pit — find sticks or chop a tree for wood.',
+                        6200
+                    );
+                }, 800);
             } else {
                 startScreen.style.display = 'flex';
                 hud.style.display = 'none';
@@ -345,16 +734,8 @@ class Game {
         }
     }
 
-    checkBulletCollisions(bullet, index) {
-        if (this.tank && this.tank.container && !this.tank.isDestroyed) {
-            const dist = bullet.position.distanceTo(this.tank.container.position);
-            if (dist < 10) {
-                this.tank.takeHit();
-                this.scene.remove(bullet);
-                this.bullets.splice(index, 1);
-                return;
-            }
-        }
+    checkBulletCollisions() {
+        /* Reserved for future hit targets */
     }
 
     animate() {
@@ -387,15 +768,19 @@ class Game {
         }
         this.sky.update(elapsed, this.camera.position, this.dayPhase);
         
-        if (this.tank) this.tank.update(delta, updatePos);
+        const dogPos = this.dog && typeof this.dog.getPosition === 'function' ? this.dog.getPosition() : null;
 
         if (this.chickenSpawner) {
-            this.chickenSpawner.update(delta, this.world, null);
+            this.chickenSpawner.update(delta, this.world, dogPos);
         }
         if (this.butterflySpawner) {
             this.butterflySpawner.update(delta, updatePos, this.world);
         }
         
+        if (this.dog && this.character.isLoaded) {
+            this.dog.update(delta, this.character.getPosition(), this.character.rotation, this.world);
+        }
+
         if (this.axe && this.character.isLoaded) {
             const charPos = this.character.getPosition();
             
@@ -407,11 +792,17 @@ class Game {
             }
             
             this.axe.update(delta, this.world, charPos, this.character.rotation);
+
+            if (this.axe.getState() === 'flying') {
+                this.world.tryAxeHitTree(this.axe.getPosition(), this.axe.flightHitTreeIds);
+            }
         }
         
         if (this.fireManager) {
             this.fireManager.update(delta);
         }
+
+        this.updateFireRingPreviewPulse(elapsed);
         
         this.updateBullets(delta);
 

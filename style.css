@@ -190,6 +190,107 @@ span {
     box-shadow: 0 0 10px #fff;
 }
 
+/* ── Fire ring HUD (counter + progress bar) ───────────────────────── */
+.fire-ring-hud {
+    position: absolute;
+    bottom: 2.2rem;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.35rem;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.28s ease;
+    z-index: 500;
+}
+
+.fire-ring-hud.fire-ring-hud--visible {
+    opacity: 1;
+}
+
+#rock-counter {
+    background: rgba(20, 20, 20, 0.78);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 6px;
+    color: #d4cfc9;
+    font-size: 1.05rem;
+    letter-spacing: 0.06rem;
+    padding: 0.45rem 1.2rem;
+    backdrop-filter: blur(8px);
+    white-space: nowrap;
+}
+
+#rock-counter.rock-counter--complete {
+    border-color: #e8a030;
+    color: #f5c060;
+    text-shadow: 0 0 10px rgba(240, 160, 40, 0.55);
+}
+
+.stick-counter {
+    background: rgba(18, 22, 16, 0.82);
+    border: 1px solid rgba(180, 200, 140, 0.35);
+    border-radius: 6px;
+    color: #c8d4b8;
+    font-size: 0.98rem;
+    letter-spacing: 0.05rem;
+    padding: 0.4rem 1.1rem;
+    backdrop-filter: blur(8px);
+    white-space: nowrap;
+}
+
+.stick-counter.stick-counter--complete {
+    border-color: #9aba6a;
+    color: #e8f0c8;
+    text-shadow: 0 0 8px rgba(160, 200, 100, 0.45);
+}
+
+.fire-ring-progress {
+    width: 13rem;
+    height: 5px;
+    border-radius: 3px;
+    background: rgba(0, 0, 0, 0.5);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    overflow: hidden;
+}
+
+.fire-ring-progress__fill {
+    height: 100%;
+    width: 0%;
+    border-radius: 2px;
+    background: linear-gradient(90deg, #2a2418, #8a5a28, #e8a040);
+    box-shadow: 0 0 12px rgba(232, 160, 64, 0.35);
+    transition: width 0.22s ease;
+}
+
+/* ── Help popup ───────────────────────────────────────────────────── */
+#help-popup {
+    position: absolute;
+    bottom: 5rem;
+    left: 50%;
+    transform: translateX(-50%) translateY(8px);
+    background: rgba(14, 16, 14, 0.85);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 8px;
+    color: #c8d8c8;
+    font-size: 0.95rem;
+    letter-spacing: 0.03rem;
+    padding: 0.6rem 1.4rem;
+    pointer-events: none;
+    max-width: 34rem;
+    text-align: center;
+    opacity: 0;
+    transition: opacity 0.22s ease, transform 0.22s ease;
+    backdrop-filter: blur(10px);
+    z-index: 500;
+}
+
+#help-popup.help-popup--visible {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+}
+
 #loading-screen {
     position: fixed;
     inset: 0;

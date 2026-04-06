@@ -72,8 +72,8 @@ export class Chicken {
     }
 
     checkDogProximity(dogPosition) {
-        if (this.isCaught || this.isDropped) return;
-        
+        if (!dogPosition || this.isCaught || this.isDropped) return;
+
         const dist = this.position.distanceTo(dogPosition);
         if (dist < 20) {
             this.state = 'fleeing';

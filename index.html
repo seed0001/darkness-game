@@ -21,7 +21,7 @@
             <h1>DARKNESS</h1>
             <p>Infinite Navigable Gray-scale World</p>
             <button id="start-btn">CLICK TO START</button>
-            <p class="controls-hint">WASD | Mouse | Shift sprint | E pick up / drop rock | 4–6 butterflies</p>
+            <p class="controls-hint">WASD · Mouse · Shift sprint · E pick up (E at lake shore: lie down / stand) · 10 rocks in a ring, then 5 sticks in the pit → fire · axe → log · click for sticks · Q throw axe · L flashlight · 1 day/night</p>
         </div>
         <div id="hud" style="display: none;">
             <div class="toolbar">
@@ -34,6 +34,18 @@
             </div>
         </div>
         <div id="crosshair"></div>
+
+        <!-- Fire ring progress (counter + bar) -->
+        <div id="fire-ring-hud" class="fire-ring-hud" aria-hidden="true">
+            <div id="rock-counter" aria-label="Rock collection progress"></div>
+            <div id="stick-counter" class="stick-counter" aria-label="Sticks for fire" hidden></div>
+            <div class="fire-ring-progress" role="progressbar" aria-valuemin="0" aria-valuemax="10" aria-valuenow="0">
+                <div id="fire-ring-progress-fill" class="fire-ring-progress__fill"></div>
+            </div>
+        </div>
+
+        <!-- Contextual help popup -->
+        <div id="help-popup" role="status" aria-live="polite"></div>
     </div>
     <canvas id="three-canvas"></canvas>
     <script type="module" src="./main.js"></script>

@@ -108,6 +108,12 @@ export class Controls {
     update(delta, terrainManager) {
         if (!this.isLocked || !this.character || !this.character.isLoaded) return;
 
+        if (this.character.isLyingProne()) {
+            this.character.update(delta, terrainManager);
+            this.updateCamera();
+            return;
+        }
+
         const isMoving = this.moveForward || this.moveBackward || this.moveLeft || this.moveRight;
         
         if (isMoving) {
