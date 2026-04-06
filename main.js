@@ -4,6 +4,11 @@ import { Controls } from './controls.js';
 import { SkyDome } from './sky.js';
 import { Drone } from './drone.js';
 import { Tank } from './tank.js';
+import { Character } from './character.js';
+import { Dog } from './dog.js';
+import { ChickenSpawner } from './chicken.js';
+import { ButterflySpawner } from './butterfly.js';
+import { Pitbull } from './pitbull.js';
 
 class Game {
     constructor() {
@@ -12,9 +17,8 @@ class Game {
         this.scene.fog = new THREE.FogExp2(0x111111, 0.002);
 
         this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 5000);
-        this.camera.position.set(0, 10, 50);
+        this.camera.position.set(0, 20, 30);
 
-        // Audio System
         this.listener = new THREE.AudioListener();
         this.camera.add(this.listener);
 
@@ -28,12 +32,22 @@ class Game {
         this.renderer.shadowMap.enabled = true;
 
         this.world = new WorldManager(this.scene);
-        this.controls = new Controls(this.camera, this.renderer.domElement);
+        
+        this.character = new Character(this.scene);
+        
+        this.controls = new Controls(this.camera, this.renderer.domElement, this.character);
+        
         this.sky = new SkyDome(this.scene);
         this.drone = new Drone(this.scene, this.listener);
         this.tank = new Tank(this.scene);
         
-        // Bullet System
+        const getPlayerPos = () => this.character.isLoaded ? this.character.getPosition() : new THREE.Vector3(0, 0, 0);
+        
+        this.dog = new Dog(this.scene, getPlayerPos);
+        this.pitbull = new Pitbull(this.scene, getPlayerPos);
+        this.chickenSpawner = new ChickenSpawner(this.scene, getPlayerPos);
+        this.butterflySpawner = new ButterflySpawner(this.scene, this.world);
+        
         this.bullets = [];
         this.bulletGeometry = new THREE.SphereGeometry(0.15, 8, 8);
         this.bulletMaterial = new THREE.MeshBasicMaterial({ color: 0xffff00 });
@@ -43,13 +57,6 @@ class Game {
         this.dayPhase = 0.0;
         this.targetDayPhase = 0.0;
 
-        // Rifle HUD State
-        this.rifleHUD = document.getElementById('rifle-hud');
-        this.rifleState = 'idle';
-        this.isReloading = false;
-        this.isFiring = false;
-        this.isAiming = false;
-
         this.initLights();
         this.initUI();
         this.initPointerLock();
@@ -58,13 +65,12 @@ class Game {
         this.animate();
         window.addEventListener('resize', () => this.onResize());
 
-        // Stats updates
         setInterval(() => {
             const chunkCount = document.getElementById('chunk-count');
             const playerPos = document.getElementById('player-pos');
             if (chunkCount) chunkCount.textContent = this.world.chunks.size;
-            if (playerPos) {
-                const pos = this.camera.position;
+            if (playerPos && this.character.isLoaded) {
+                const pos = this.character.getPosition();
                 playerPos.textContent = `${pos.x.toFixed(1)}, ${pos.z.toFixed(1)}`;
             }
         }, 100);
@@ -76,7 +82,7 @@ class Game {
         this.scene.add(this.flashlight);
         this.scene.add(this.flashlight.target);
 
-        this.ambientLight = new THREE.AmbientLight(0xffffff, 0);
+        this.ambientLight = new THREE.AmbientLight(0xffffff, 0.1);
         this.scene.add(this.ambientLight);
 
         this.sunLight = new THREE.DirectionalLight(0xffffff, 0);
@@ -110,24 +116,13 @@ class Game {
                 this.isDay = !this.isDay;
                 this.targetDayPhase = this.isDay ? 1.0 : 0.0;
             }
-            if (e.key.toLowerCase() === 'r' && !this.isReloading) {
-                this.reload();
-            }
         });
 
         window.addEventListener('mousedown', (e) => {
-            if (!this.controls.controls.isLocked) return;
+            if (!this.controls.isLocked) return;
             
-            if (e.button === 0) { // Left Click - Fire
+            if (e.button === 0) {
                 this.fire();
-            } else if (e.button === 2) { // Right Click - Aim
-                this.isAiming = true;
-            }
-        });
-
-        window.addEventListener('mouseup', (e) => {
-            if (e.button === 2) { // Right Click - Release Aim
-                this.isAiming = false;
             }
         });
 
@@ -135,51 +130,39 @@ class Game {
     }
 
     fire() {
-        if (this.isReloading || this.isFiring) return;
-        this.isFiring = true;
-        
-        // Spawn Real Bullet
         const bullet = new THREE.Mesh(this.bulletGeometry, this.bulletMaterial);
-        bullet.position.copy(this.camera.position);
         
-        // Get camera forward direction
-        const direction = new THREE.Vector3(0, 0, -1);
-        direction.applyQuaternion(this.camera.quaternion);
-        
-        bullet.userData = {
-            velocity: direction.multiplyScalar(400), // High Speed
-            lifetime: 2.0
-        };
-        
-        this.scene.add(bullet);
-        this.bullets.push(bullet);
-
-        setTimeout(() => {
-            this.isFiring = false;
-        }, 150);
-    }
-
-    reload() {
-        this.isReloading = true;
-        setTimeout(() => {
-            this.isReloading = false;
-        }, 2000);
+        if (this.character.isLoaded) {
+            const charPos = this.character.getPosition();
+            bullet.position.set(charPos.x, charPos.y + 4, charPos.z);
+            
+            const direction = new THREE.Vector3(0, 0, -1);
+            direction.applyQuaternion(this.camera.quaternion);
+            
+            bullet.userData = {
+                velocity: direction.multiplyScalar(400),
+                lifetime: 2.0
+            };
+            
+            this.scene.add(bullet);
+            this.bullets.push(bullet);
+        }
     }
 
     initPointerLock() {
         const startScreen = document.getElementById('start-screen');
         const hud = document.getElementById('hud');
 
-        this.controls.controls.addEventListener('lock', () => {
-            startScreen.style.display = 'none';
-            hud.style.display = 'flex';
-            this.toggleFlashlight(true);
-        });
-
-        this.controls.controls.addEventListener('unlock', () => {
-            startScreen.style.display = 'flex';
-            hud.style.display = 'none';
-            this.toggleFlashlight(false);
+        document.addEventListener('pointerlockchange', () => {
+            if (document.pointerLockElement === this.renderer.domElement) {
+                startScreen.style.display = 'none';
+                hud.style.display = 'flex';
+                this.toggleFlashlight(true);
+            } else {
+                startScreen.style.display = 'flex';
+                hud.style.display = 'none';
+                this.toggleFlashlight(false);
+            }
         });
     }
 
@@ -196,21 +179,6 @@ class Game {
         this.renderer.setSize(window.innerWidth, window.innerHeight);
     }
 
-    updateRifleHUD() {
-        if (!this.rifleHUD) return;
-        
-        let newState = 'idle';
-        if (this.isReloading) newState = 'reloading';
-        else if (this.isFiring) newState = 'firing';
-        else if (this.isAiming) newState = 'aiming';
-
-        if (this.rifleState !== newState) {
-            this.rifleHUD.className = '';
-            this.rifleHUD.classList.add(newState);
-            this.rifleState = newState;
-        }
-    }
-
     updateBullets(delta) {
         for (let i = this.bullets.length - 1; i >= 0; i--) {
             const bullet = this.bullets[i];
@@ -223,16 +191,14 @@ class Game {
                 continue;
             }
 
-            // Bullet-to-Entity Collision Detection
             this.checkBulletCollisions(bullet, i);
         }
     }
 
     checkBulletCollisions(bullet, index) {
-        // Drone Hit Test
         if (this.drone && this.drone.model && !this.drone.isDestroyed && !this.drone.isCrashing) {
             const dist = bullet.position.distanceTo(this.drone.model.position);
-            if (dist < 8) { // Hitbox radius
+            if (dist < 8) {
                 this.drone.takeHit();
                 this.scene.remove(bullet);
                 this.bullets.splice(index, 1);
@@ -240,10 +206,9 @@ class Game {
             }
         }
 
-        // Tank Hit Test
         if (this.tank && this.tank.container && !this.tank.isDestroyed) {
             const dist = bullet.position.distanceTo(this.tank.container.position);
-            if (dist < 10) { // Hitbox radius
+            if (dist < 10) {
                 this.tank.takeHit();
                 this.scene.remove(bullet);
                 this.bullets.splice(index, 1);
@@ -259,7 +224,7 @@ class Game {
         const transitionSpeed = 0.5;
         if (Math.abs(this.dayPhase - this.targetDayPhase) > 0.01) {
             this.dayPhase = THREE.MathUtils.lerp(this.dayPhase, this.targetDayPhase, delta * transitionSpeed);
-            if (this.ambientLight) this.ambientLight.intensity = this.dayPhase * 0.8;
+            if (this.ambientLight) this.ambientLight.intensity = 0.1 + this.dayPhase * 0.7;
             if (this.sunLight) this.sunLight.intensity = this.dayPhase * 1.5;
             
             const nightFog = new THREE.Color(0x111111);
@@ -271,23 +236,42 @@ class Game {
         }
 
         this.controls.update(delta, this.world);
-        this.world.update(this.camera.position);
+        
+        const updatePos = this.character.isLoaded ? this.character.getPosition() : this.camera.position;
+        this.world.update(updatePos);
         this.sky.update(this.clock.getElapsedTime(), this.camera.position, this.dayPhase);
         
-        if (this.drone) this.drone.update(delta, this.camera.position);
-        if (this.tank) this.tank.update(delta, this.camera.position);
+        if (this.drone) this.drone.update(delta, updatePos);
+        if (this.tank) this.tank.update(delta, updatePos);
+        
+        const playerIsMoving = this.controls.moveForward || this.controls.moveBackward || 
+                               this.controls.moveLeft || this.controls.moveRight;
+        
+        if (this.dog) {
+            this.dog.update(delta, this.world);
+        }
+        if (this.pitbull) {
+            this.pitbull.update(delta, this.world, playerIsMoving);
+        }
+        if (this.chickenSpawner) {
+            this.chickenSpawner.update(delta, this.world, null);
+        }
+        if (this.butterflySpawner) {
+            this.butterflySpawner.update(delta, updatePos, this.world);
+        }
         
         this.updateBullets(delta);
 
-        if (this.flashlight) {
-            this.flashlight.position.copy(this.camera.position);
+        if (this.flashlight && this.character.isLoaded) {
+            const charPos = this.character.getPosition();
+            this.flashlight.position.set(charPos.x, charPos.y + 5, charPos.z);
+            
             const targetPos = new THREE.Vector3(0, 0, -1);
             targetPos.applyQuaternion(this.camera.quaternion);
-            targetPos.add(this.camera.position);
+            targetPos.add(this.flashlight.position);
             this.flashlight.target.position.copy(targetPos);
         }
 
-        this.updateRifleHUD();
         this.renderer.render(this.scene, this.camera);
     }
 }

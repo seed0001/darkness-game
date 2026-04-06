@@ -11,10 +11,16 @@ export class Drone {
         this.model = null;
         
         // Flight parameters
-        this.angle = 0;
-        this.radius = 120;
         this.height = 35;
-        this.speed = 0.4;
+        this.speed = 45;
+        
+        // Waypoint patrol system
+        this.currentWaypoint = new THREE.Vector3(0, this.height, 0);
+        this.nextWaypoint = new THREE.Vector3(0, this.height, 0);
+        this.waypointProgress = 0;
+        this.patrolRadius = 200;
+        this.minWaypointDist = 80;
+        this.maxWaypointDist = 250;
         
         // Combat state
         this.isCrashing = false;
@@ -112,6 +118,21 @@ export class Drone {
         }
     }
 
+    pickNewWaypoint(playerPosition) {
+        const angle = Math.random() * Math.PI * 2;
+        const dist = this.minWaypointDist + Math.random() * (this.maxWaypointDist - this.minWaypointDist);
+        
+        // Pick a random point, sometimes near player, sometimes far
+        const centerX = Math.random() > 0.3 ? playerPosition.x : this.model.position.x;
+        const centerZ = Math.random() > 0.3 ? playerPosition.z : this.model.position.z;
+        
+        this.nextWaypoint.set(
+            centerX + Math.cos(angle) * dist,
+            this.height,
+            centerZ + Math.sin(angle) * dist
+        );
+    }
+
     takeHit() {
         if (this.isCrashing || this.isDestroyed) return;
         this.isCrashing = true;
@@ -170,7 +191,7 @@ export class Drone {
             return;
         }
 
-        // Standard AI Update
+        // Tracking state toggle
         if (!this.lastStateChange) this.lastStateChange = 0;
         this.lastStateChange += delta;
 
@@ -179,22 +200,34 @@ export class Drone {
             this.lastStateChange = 0;
         }
 
-        this.angle += delta * this.speed;
-        const targetX = playerPosition.x + Math.cos(this.angle) * this.radius;
-        const targetZ = playerPosition.z + Math.sin(this.angle) * this.radius;
-        const targetY = this.height + Math.sin(this.angle * 0.8) * 5;
+        // Waypoint patrol system
+        const distToWaypoint = this.model.position.distanceTo(this.nextWaypoint);
+        
+        if (distToWaypoint < 15 || !this.waypointInitialized) {
+            this.waypointInitialized = true;
+            this.currentWaypoint.copy(this.model.position);
+            this.pickNewWaypoint(playerPosition);
+            this.waypointProgress = 0;
+        }
 
-        const targetPos = new THREE.Vector3(targetX, targetY, targetZ);
-        this.model.position.lerp(targetPos, 0.03);
+        // Move toward waypoint
+        const direction = new THREE.Vector3();
+        direction.subVectors(this.nextWaypoint, this.model.position);
+        direction.normalize();
+        
+        this.model.position.addScaledVector(direction, this.speed * delta);
+        
+        // Add some height variation based on time
+        const heightVariation = Math.sin(Date.now() * 0.001) * 5;
+        this.model.position.y = this.height + heightVariation;
 
-        const nextAngle = this.angle + 0.1;
-        const lookAtPos = new THREE.Vector3(
-            playerPosition.x + Math.cos(nextAngle) * this.radius,
-            targetY,
-            playerPosition.z + Math.sin(nextAngle) * this.radius
-        );
-        this.model.lookAt(lookAtPos);
+        // Face movement direction
+        const lookTarget = this.model.position.clone().add(direction.multiplyScalar(10));
+        lookTarget.y = this.model.position.y;
+        this.model.lookAt(lookTarget);
 
+        // Update searchlights
+        const time = Date.now() * 0.001;
         this.searchLights.forEach((light, i) => {
             const offset = new THREE.Vector3(i === 0 ? -2 : 2, -1, 5);
             offset.applyQuaternion(this.model.quaternion);
@@ -203,9 +236,9 @@ export class Drone {
             if (this.isTracking) {
                 light.target.position.lerp(playerPosition, 0.1);
             } else {
-                const sweepX = Math.sin(this.angle * 2 + i) * 20;
-                const sweepZ = Math.cos(this.angle * 2 + i) * 20;
-                const searchTarget = new THREE.Vector3(sweepX, -targetY, 30 + sweepZ);
+                const sweepX = Math.sin(time * 2 + i * Math.PI) * 30;
+                const sweepZ = Math.cos(time * 1.5 + i * Math.PI) * 30;
+                const searchTarget = new THREE.Vector3(sweepX, -this.height, 40 + sweepZ);
                 searchTarget.applyQuaternion(this.model.quaternion);
                 light.target.position.copy(light.position).add(searchTarget);
             }

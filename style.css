@@ -190,36 +190,3 @@ span {
     box-shadow: 0 0 10px #fff;
 }
 
-#rifle-hud {
-    position: absolute;
-    bottom: -20px;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 600px;
-    height: 450px;
-    background-image: url('/hud/rifle.png');
-    background-size: 200% 200%;
-    background-repeat: no-repeat;
-    pointer-events: none;
-    z-index: 1000;
-    transition: transform 0.2s ease-out, bottom 0.2s ease-out;
-}
-
-#rifle-hud.idle {
-    background-position: 0% 0%; /* Top Left */
-}
-
-#rifle-hud.aiming {
-    background-position: 100% 0%; /* Top Right */
-    transform: translateX(-50%) translateY(-20px) scale(1.1);
-}
-
-#rifle-hud.firing {
-    background-position: 0% 100%; /* Bottom Left */
-    transform: translateX(-50%) translateY(-5px);
-}
-
-#rifle-hud.reloading {
-    background-position: 100% 100%; /* Bottom Right */
-    transform: translateX(-50%) translateY(20px);
-}
