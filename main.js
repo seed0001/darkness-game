@@ -40,8 +40,9 @@ function readStoredBool(key, defaultValue) {
 class Game {
     constructor() {
         this.scene = new THREE.Scene();
-        this.scene.background = new THREE.Color(0x111111);
-        this.scene.fog = new THREE.FogExp2(0x111111, 0.002);
+        const nightHorizon = 0x252b26;
+        this.scene.background = new THREE.Color(nightHorizon);
+        this.scene.fog = new THREE.FogExp2(nightHorizon, 0.00175);
 
         this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 500000);
         this.camera.position.set(0, 20, 30);
@@ -1073,10 +1074,10 @@ class Game {
             if (this.ambientLight) this.ambientLight.intensity = 0.1 + this.dayPhase * 0.7;
             if (this.sunLight) this.sunLight.intensity = this.dayPhase * 1.5;
             
-            const nightFog = new THREE.Color(0x111111);
+            const nightFog = new THREE.Color(0x252b26);
             const dayFog = new THREE.Color(0x7fbfff);
             this.scene.fog.color.lerpColors(nightFog, dayFog, this.dayPhase);
-            this.scene.fog.density = THREE.MathUtils.lerp(0.002, 0.0005, this.dayPhase);
+            this.scene.fog.density = THREE.MathUtils.lerp(0.00175, 0.0005, this.dayPhase);
         } else {
             this.dayPhase = this.targetDayPhase;
         }
@@ -1106,8 +1107,14 @@ class Game {
             this.butterflySpawner.update(delta, updatePos, this.world);
         }
         
-        if (this.dogEnabled && this.dog && this.character.isLoaded) {
-            this.dog.update(delta, this.character.getPosition(), this.character.rotation, this.world);
+        // Chance must update whenever the companion is enabled — not only after the player character
+        // finishes loading (character loads on Start). Otherwise Y never snaps to terrain and the dog stays underground.
+        if (this.dogEnabled && this.dog?.model) {
+            const dogPlayerPos = this.character.isLoaded
+                ? this.character.getPosition()
+                : new THREE.Vector3(0, this.world.getHeightAt(0, 0), 0);
+            const dogYaw = this.character.isLoaded ? this.character.rotation : 0;
+            this.dog.update(delta, dogPlayerPos, dogYaw, this.world);
         }
 
         if (this.axe && this.character.isLoaded) {

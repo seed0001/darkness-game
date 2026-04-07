@@ -1,6 +1,6 @@
 import * as THREE from 'three';
-import { Water } from 'three/examples/jsm/objects/Water.js';
-import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
+/** Same flow + dual normal maps as three.js `webgpu_water` / Water2Mesh; WebGL path (Reflector + Refractor). */
+import { Water as WaterFlow } from 'three/examples/jsm/objects/Water2.js';
 import {
     createSharedGrassBladeGeometry,
     createSharedGrassWindMaterial,
@@ -12,6 +12,7 @@ import {
     createStickWoodMaterial
 } from './grassRocks.js';
 import { computeGrassInstanceMatricesWithHeight } from './chunkGenShared.js';
+import { createProceduralTree } from './ezTreeSpawn.js';
 
 function mulberry32(a) {
     return function () {
@@ -113,14 +114,12 @@ export class WorldManager {
         this.grassGeometry = createSharedGrassBladeGeometry();
         this.grassMaterial = createSharedGrassWindMaterial();
 
+        /** Procedural pines via @dgreenheck/ez-tree (see ezTreeSpawn.js). */
         this.pineReady = false;
-        this.pineTreeProto = null;
-        this.pineTreeScale = 1;
-        this.pineSharedMaterial = null;
 
         this.terrainMaterial = new THREE.MeshStandardMaterial({
             map: null,
-            color: 0x888888,
+            color: 0x9aa294,
             metalness: 0,
             roughness: 1.0,
             flatShading: false
@@ -180,7 +179,9 @@ export class WorldManager {
             this.grassGeometry,
             this.grassMaterial,
             data.matrices,
-            data.count
+            data.count,
+            undefined,
+            data.instanceColors
         );
         this.scene.add(grass);
         chunk.grass = grass;
@@ -211,96 +212,27 @@ export class WorldManager {
                 : 1.65,
             0.08
         );
-        const treeHeightMultiplier = 4.75;
+        /** World target height for canopy (~human height × this). Higher = bigger trees. */
+        const treeHeightMultiplier = 16.5;
         this.referenceHumanHeight = refHuman;
         this.targetTreeHeightWorld = refHuman * treeHeightMultiplier;
 
-        return new Promise((resolve, reject) => {
-            const texLoader = new THREE.TextureLoader();
-            const loadTex = (url) =>
-                new Promise((res, rej) => {
-                    texLoader.load(url, res, undefined, rej);
-                });
-
-            Promise.all([
-                loadTex('/textures/luscious_pine_color.png'),
-                loadTex('/textures/luscious_pine_normal.png'),
-                loadTex('/textures/luscious_pine_roughness.png'),
-                loadTex('/textures/luscious_pine_metallic.png')
-            ])
-                .then(([map, normalMap, roughnessMap, metalnessMap]) => {
-                    map.colorSpace = THREE.SRGBColorSpace;
-                    map.anisotropy = 8;
-                    normalMap.colorSpace = THREE.LinearSRGBColorSpace;
-                    roughnessMap.colorSpace = THREE.LinearSRGBColorSpace;
-                    metalnessMap.colorSpace = THREE.LinearSRGBColorSpace;
-
-                    this.pineSharedMaterial = new THREE.MeshStandardMaterial({
-                        map,
-                        normalMap,
-                        roughnessMap,
-                        metalnessMap,
-                        metalness: 1,
-                        roughness: 1
-                    });
-
-                    const fbxLoader = new FBXLoader();
-                    fbxLoader.load(
-                        '/models/luscious_pine.fbx',
-                        (fbx) => {
-                            fbx.traverse((child) => {
-                                if (child.isMesh) {
-                                    child.material = this.pineSharedMaterial;
-                                    child.castShadow = true;
-                                    child.receiveShadow = true;
-                                }
-                            });
-                            this.pineTreeProto = fbx;
-
-                            const box = new THREE.Box3().setFromObject(fbx);
-                            const size = new THREE.Vector3();
-                            box.getSize(size);
-                            this.pineTreeScale =
-                                this.targetTreeHeightWorld / Math.max(size.y, 0.001);
-
-                            this.pineReady = true;
-                            this.backfillPendingTrees();
-                            resolve();
-                        },
-                        undefined,
-                        (err) => {
-                            console.error('Luscious pine FBX failed:', err);
-                            reject(err);
-                        }
-                    );
-                })
-                .catch((err) => {
-                    console.error('Luscious pine textures failed:', err);
-                    reject(err);
-                });
-        });
+        this.pineReady = true;
+        this.backfillPendingTrees();
+        return Promise.resolve();
     }
 
     spawnTreesForChunk(cx, cz, groundY, outArray) {
-        if (!this.pineReady || !this.pineTreeProto) return;
+        if (!this.pineReady) return;
 
         const trng = chunkTreeRng(cx, cz);
-        const numTrees = 1 + Math.floor(trng() * 3);
+        /** 5–9 trees per chunk (was 1–3). */
+        const numTrees = 5 + Math.floor(trng() * 5);
         const inset = this.chunkSize * 0.46;
 
         for (let i = 0; i < numTrees; i++) {
-            const tree = this.pineTreeProto.clone(true);
-            const scale = this.pineTreeScale * (0.92 + trng() * 0.32);
-            tree.scale.setScalar(scale);
-            tree.rotation.y = trng() * Math.PI * 2;
-            tree.userData.meshyTree = true;
-            tree.userData.treePhase = 'standing';
-            tree.userData.chopStandingHits = 0;
+            const tree = createProceduralTree(trng, this.targetTreeHeightWorld);
             tree.userData.chunkKey = `${cx},${cz}`;
-            tree.userData.baseRotY = tree.rotation.y;
-            tree.userData.baseRotX = 0;
-            tree.userData.baseRotZ = 0;
-            tree.userData.windPhase = trng() * Math.PI * 2;
 
             const tx = (trng() - 0.5) * 2 * inset;
             const tz = (trng() - 0.5) * 2 * inset;
@@ -321,7 +253,7 @@ export class WorldManager {
     }
 
     backfillPendingTrees() {
-        if (!this.pineReady || !this.pineTreeProto) return;
+        if (!this.pineReady) return;
         this.chunks.forEach((chunk) => {
             if (chunk.objects && chunk.objects.length > 0) return;
             const groundY = chunk.mesh.position.y;
@@ -352,20 +284,31 @@ export class WorldManager {
     }
 
     initWater() {
-        this._waterPromise = new THREE.TextureLoader()
-            .loadAsync('https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/waternormals.jpg')
-            .then((texture) => {
-                texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+        const texBase =
+            'https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/water/';
+        const loader = new THREE.TextureLoader();
+        this._waterPromise = Promise.all([
+            loader.loadAsync(texBase + 'Water_1_M_Normal.jpg'),
+            loader.loadAsync(texBase + 'Water_2_M_Normal.jpg')
+        ])
+            .then(([normalMap0, normalMap1]) => {
+                normalMap0.wrapS = normalMap0.wrapT = THREE.RepeatWrapping;
+                normalMap1.wrapS = normalMap1.wrapT = THREE.RepeatWrapping;
+
+                /** Matches official `webgpu_water` example defaults (flow is constant direction, not a flow map). */
+                const flowDir = new THREE.Vector2(1, 1).normalize();
+
                 const waterGeometry = new THREE.PlaneGeometry(10000, 10000);
-                this.water = new Water(waterGeometry, {
+                this.water = new WaterFlow(waterGeometry, {
                     textureWidth: 256,
                     textureHeight: 256,
-                    waterNormals: texture,
-                    sunDirection: new THREE.Vector3(),
-                    sunColor: 0x222222,
-                    waterColor: 0x111111,
-                    distortionScale: 3.7,
-                    fog: this.scene.fog !== undefined
+                    normalMap0,
+                    normalMap1,
+                    color: new THREE.Color(0x1e3540),
+                    scale: 2,
+                    flowDirection: flowDir,
+                    flowSpeed: 0.03,
+                    reflectivity: 0.02
                 });
                 this.water.rotation.x = -Math.PI / 2;
                 this.water.position.y = this.waterLevel;
@@ -374,22 +317,23 @@ export class WorldManager {
                 const lakeW = LAKE_RX * 2 + 14;
                 const lakeD = LAKE_RZ * 2 + 14;
                 const lakeGeometry = new THREE.PlaneGeometry(lakeW, lakeD);
-                this.lakeWater = new Water(lakeGeometry, {
+                this.lakeWater = new WaterFlow(lakeGeometry, {
                     textureWidth: 512,
                     textureHeight: 512,
-                    waterNormals: texture,
-                    sunDirection: new THREE.Vector3(0.58, 0.72, 0.38).normalize(),
-                    sunColor: 0xffffff,
-                    waterColor: 0x1a5a6a,
-                    distortionScale: 5.2,
-                    fog: this.scene.fog !== undefined
+                    normalMap0,
+                    normalMap1,
+                    color: new THREE.Color(0x99e0ff),
+                    scale: 2,
+                    flowDirection: flowDir.clone(),
+                    flowSpeed: 0.03,
+                    reflectivity: 0.02
                 });
                 this.lakeWater.rotation.x = -Math.PI / 2;
                 this.lakeWater.position.set(LAKE_CX, -0.12, LAKE_CZ);
                 this.scene.add(this.lakeWater);
             })
             .catch((err) => {
-                console.warn('Water normals failed to load:', err);
+                console.warn('Water normal maps failed to load:', err);
             });
     }
 
@@ -510,7 +454,7 @@ export class WorldManager {
         if (Math.hypot(ccx - LAKE_CX, ccz - LAKE_CZ) > 54) return;
 
         this.scene.remove(chunk.grass);
-        const { count, matrices } = computeGrassInstanceMatricesWithHeight(
+        const { count, matrices, instanceColors } = computeGrassInstanceMatricesWithHeight(
             this.chunkSize,
             cx,
             cz,
@@ -520,7 +464,9 @@ export class WorldManager {
             this.grassGeometry,
             this.grassMaterial,
             matrices,
-            count
+            count,
+            undefined,
+            instanceColors
         );
         this.scene.add(grass);
         chunk.grass = grass;
@@ -713,6 +659,10 @@ export class WorldManager {
             chunk.objects.forEach((obj) => {
                 if (!obj.userData?.meshyTree) return;
                 if (obj.userData.treePhase && obj.userData.treePhase !== 'standing') return;
+                if (obj.userData.ezTree && typeof obj.update === 'function') {
+                    obj.update(t);
+                    return;
+                }
                 const ph = obj.userData.windPhase ?? 0;
                 const s = 0.85;
                 obj.rotation.y = obj.userData.baseRotY ?? obj.rotation.y;
@@ -846,15 +796,7 @@ export class WorldManager {
             this.generateChunk(missing[i].x, missing[i].z);
         }
 
-        if (this.water) {
-            this._waterAcc = (this._waterAcc || 0) + 1;
-            if (this._waterAcc % 2 === 0) {
-                const t = (this.water.material.uniforms['time'].value += 1.0 / 30.0);
-                if (this.lakeWater) {
-                    this.lakeWater.material.uniforms['time'].value = t;
-                }
-            }
-        }
+        // Water2 animates flow via internal Clock in onBeforeRender — no manual time uniform.
     }
 
     /**

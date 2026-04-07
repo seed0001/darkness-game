@@ -63,6 +63,8 @@ const fragmentShader = `
         vec3 finalNebula = (blueNebula + purpleNebula) * n * 0.4;
         
         vec3 nightColor = finalNebula + vec3(stars);
+        float nearGround = 1.0 - smoothstep(-0.12, 0.22, direction.y);
+        nightColor += vec3(0.045, 0.05, 0.042) * nearGround;
         
         // --- Day Sky (Atmospheric Scattering Simulation) ---
         vec3 daySkyTop = vec3(0.1, 0.4, 0.8);
@@ -103,7 +105,7 @@ export class SkyDome {
         
         this.mesh = new THREE.Mesh(this.geometry, this.material);
         this.scene.add(this.mesh);
-        this.scene.background = new THREE.Color(0x000000);
+        this.scene.background = new THREE.Color(0x252b26);
     }
 
     update(time, cameraPosition, dayPhase = 0) {
