@@ -31,8 +31,8 @@ function chunkTreeRng(cx, cz) {
 /** Elliptical depression next to spawn (0,0) — east / slightly north */
 export const LAKE_CX = 26;
 export const LAKE_CZ = 12;
-const LAKE_RX = 23;
-const LAKE_RZ = 17;
+export const LAKE_RX = 23;
+export const LAKE_RZ = 17;
 const LAKE_MAX_DEPTH = 2.45;
 
 /** True when the player is close enough to the lake for shore interactions (lie down, etc.). */

@@ -10,6 +10,7 @@ import { ButterflySpawner } from './butterfly.js';
 import { ThrowingAxe } from './axe.js';
 import { FireManager, preloadFireMedia } from './fire.js';
 import { AmbientWind } from './ambientWind.js';
+import { loadLakeFish } from './lakeFish.js';
 
 class Game {
     constructor() {
@@ -94,6 +95,7 @@ class Game {
         this.initUI();
         this.initPointerLock();
         this.clock = null;
+        this.lakeFishUpdate = null;
 
         window.addEventListener('resize', () => this.onResize());
 
@@ -136,6 +138,13 @@ class Game {
                 new FBXLoader().loadAsync('/models/butterfly.fbx').catch(() => {}),
                 new FBXLoader().loadAsync('/models/chicken.fbx').catch(() => {})
             ]);
+
+            setProgress(0.26);
+            setStatus('Loading lake fish…');
+            this.lakeFishUpdate = await loadLakeFish(this.scene).catch((err) => {
+                console.warn('Lake fish:', err);
+                return null;
+            });
 
             setProgress(0.28);
             const humanH =
@@ -761,6 +770,7 @@ class Game {
         const updatePos = this.character.isLoaded ? this.character.getPosition() : this.camera.position;
         this.world.update(updatePos);
         const elapsed = this.clock ? this.clock.getElapsedTime() : 0;
+        if (this.lakeFishUpdate) this.lakeFishUpdate(elapsed);
         this.world.updateDecorationTime(elapsed);
         this.world.updateTreeWind(elapsed);
         if (this.character.isLoaded) {
