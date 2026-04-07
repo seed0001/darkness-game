@@ -139,13 +139,16 @@ export class Controls {
             
             const moveX = Math.sin(moveAngle) * actualSpeed * delta;
             const moveZ = Math.cos(moveAngle) * actualSpeed * delta;
-            
+
             const charPos = this.character.getPosition();
-            this.character.setPosition(
-                charPos.x + moveX,
-                charPos.y,
-                charPos.z + moveZ
-            );
+            let nx = charPos.x + moveX;
+            let nz = charPos.z + moveZ;
+            if (terrainManager && typeof terrainManager.resolveBoulderCollision === 'function') {
+                const res = terrainManager.resolveBoulderCollision(nx, nz);
+                nx = res.x;
+                nz = res.z;
+            }
+            this.character.setPosition(nx, charPos.y, nz);
             
             this.character.setRotation(moveAngle);
             this.character.setState(animState);

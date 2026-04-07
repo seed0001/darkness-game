@@ -179,7 +179,8 @@ export function createBouldersForChunk(scene, chunkSize, cx, cz, groundY) {
     for (let i = 0; i < n; i++) {
         const lx = (rng() - 0.5) * 2 * half;
         const lz = (rng() - 0.5) * 2 * half;
-        const geo = new THREE.DodecahedronGeometry(1.05 + rng() * 0.95, 1);
+        const geoRadius = 1.05 + rng() * 0.95;
+        const geo = new THREE.DodecahedronGeometry(geoRadius, 1);
         const mesh = new THREE.Mesh(geo, boulderMat);
         const scale = 1.9 + rng() * 2.9;
         mesh.scale.setScalar(scale);
@@ -188,6 +189,8 @@ export function createBouldersForChunk(scene, chunkSize, cx, cz, groundY) {
         mesh.castShadow = true;
         mesh.receiveShadow = true;
         mesh.userData.isBoulder = true;
+        /* Horizontal cylinder-ish block for walking (mesh is irregular). */
+        mesh.userData.collisionRadius = geoRadius * scale * 0.88 + 0.2;
         scene.add(mesh);
         meshes.push(mesh);
     }

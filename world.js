@@ -857,6 +857,42 @@ export class WorldManager {
         }
     }
 
+    /**
+     * Push (x,z) out of boulder collision circles so the player cannot walk through large rocks.
+     */
+    resolveBoulderCollision(x, z, playerRadius = 0.42) {
+        let px = x;
+        let pz = z;
+        const boulders = [];
+        this.chunks.forEach((chunk) => {
+            if (!chunk.boulders) return;
+            for (let i = 0; i < chunk.boulders.length; i++) {
+                const b = chunk.boulders[i];
+                if (b.parent) boulders.push(b);
+            }
+        });
+        for (let iter = 0; iter < 4; iter++) {
+            for (let i = 0; i < boulders.length; i++) {
+                const b = boulders[i];
+                let r = b.userData.collisionRadius;
+                if (typeof r !== 'number' || r <= 0) {
+                    r = 1.45 * b.scale.x + 0.25;
+                }
+                const dx = px - b.position.x;
+                const dz = pz - b.position.z;
+                const distSq = dx * dx + dz * dz;
+                const minD = playerRadius + r;
+                const minSq = minD * minD;
+                if (distSq >= minSq || distSq < 1e-10) continue;
+                const dist = Math.sqrt(distSq);
+                const push = (minD - dist) / dist;
+                px += dx * push;
+                pz += dz * push;
+            }
+        }
+        return { x: px, z: pz };
+    }
+
     getHeightAt(x, z) {
         const cx = Math.floor(x / this.chunkSize);
         const cz = Math.floor(z / this.chunkSize);
