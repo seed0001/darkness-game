@@ -11,6 +11,7 @@ import { ThrowingAxe } from './axe.js';
 import { FireManager, preloadFireMedia } from './fire.js';
 import { AmbientWind } from './ambientWind.js';
 import { loadLakeFish } from './lakeFish.js';
+import { loadScorpions } from './scorpion.js';
 
 class Game {
     constructor() {
@@ -157,8 +158,14 @@ class Game {
             setProgress(0.34);
             setStatus('Loading terrain, grass, and decorations…');
             await this.world.preloadWorldAt(new THREE.Vector3(0, 0, 0), (p) => {
-                setProgress(0.34 + p * 0.6);
+                setProgress(0.34 + p * 0.58);
             });
+
+            setStatus('Placing scorpions…');
+            setProgress(0.93);
+            await loadScorpions(this.scene, this.world).catch((err) =>
+                console.warn('Scorpions:', err)
+            );
 
             setStatus('Preparing graphics…');
             setProgress(0.94);
