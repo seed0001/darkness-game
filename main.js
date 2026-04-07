@@ -12,6 +12,8 @@ import { FireManager, preloadFireMedia } from './fire.js';
 import { AmbientWind } from './ambientWind.js';
 import { loadLakeFish } from './lakeFish.js';
 import { loadScorpions } from './scorpion.js';
+import { loadFlyingAirbus } from './airbus.js';
+import { WorldMinimap } from './minimap.js';
 import { BackpackManager } from './backpack.js';
 
 class Game {
@@ -20,7 +22,7 @@ class Game {
         this.scene.background = new THREE.Color(0x111111);
         this.scene.fog = new THREE.FogExp2(0x111111, 0.002);
 
-        this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 5000);
+        this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 500000);
         this.camera.position.set(0, 20, 30);
 
         this.listener = new THREE.AudioListener();
@@ -99,6 +101,19 @@ class Game {
         this.initPointerLock();
         this.clock = null;
         this.lakeFishUpdate = null;
+        this.airbusUpdate = null;
+        this.worldMinimap = null;
+
+        const minimapCanvas = document.getElementById('world-minimap');
+        if (minimapCanvas) {
+            this.worldMinimap = new WorldMinimap(minimapCanvas, () => {
+                if (this.character?.isLoaded) {
+                    const p = this.character.getPosition();
+                    return { x: p.x, z: p.z };
+                }
+                return { x: 0, z: 0 };
+            });
+        }
 
         window.addEventListener('resize', () => this.onResize());
 
@@ -173,6 +188,12 @@ class Game {
             await loadScorpions(this.scene, this.world).catch((err) =>
                 console.warn('Scorpions:', err)
             );
+
+            setStatus('Launching Airbus…');
+            this.airbusUpdate = await loadFlyingAirbus(this.scene, this.world).catch((err) => {
+                console.warn('Airbus:', err);
+                return null;
+            });
 
             setStatus('Preparing graphics…');
             setProgress(0.94);
@@ -768,6 +789,7 @@ class Game {
         this.camera.updateProjectionMatrix();
         this.renderer.setSize(window.innerWidth, window.innerHeight);
         this.renderer.setPixelRatio(Math.min(1.5, window.devicePixelRatio || 1));
+        if (this.worldMinimap) this.worldMinimap.resize();
     }
 
     updateBullets(delta) {
@@ -814,6 +836,7 @@ class Game {
         this.world.update(updatePos);
         const elapsed = this.clock ? this.clock.getElapsedTime() : 0;
         if (this.lakeFishUpdate) this.lakeFishUpdate(elapsed);
+        if (this.airbusUpdate) this.airbusUpdate(elapsed);
         this.world.updateDecorationTime(elapsed);
         this.world.updateTreeWind(elapsed);
         if (this.character.isLoaded) {
@@ -868,6 +891,8 @@ class Game {
             targetPos.add(this.flashlight.position);
             this.flashlight.target.position.copy(targetPos);
         }
+
+        if (this.worldMinimap) this.worldMinimap.draw();
 
         this.renderer.render(this.scene, this.camera);
     }

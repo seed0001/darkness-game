@@ -350,3 +350,78 @@ span {
     transition: width 0.12s ease-out;
 }
 
+/* --- World minimap (lake + Airbus + player) --- */
+.world-minimap-wrap {
+    position: fixed;
+    right: 14px;
+    bottom: 14px;
+    z-index: 120;
+    pointer-events: none;
+    width: 228px;
+    padding: 8px 10px 10px;
+    background: rgba(8, 10, 16, 0.88);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 8px;
+    box-shadow: 0 4px 18px rgba(0, 0, 0, 0.45);
+}
+
+.world-minimap__title {
+    font-size: 0.72rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: rgba(200, 210, 220, 0.85);
+    margin-bottom: 6px;
+}
+
+#world-minimap {
+    display: block;
+    width: 220px;
+    height: 220px;
+    border-radius: 4px;
+    background: #0c0e14;
+}
+
+.world-minimap__legend {
+    list-style: none;
+    margin: 8px 0 0;
+    padding: 0;
+    font-size: 0.68rem;
+    line-height: 1.45;
+    color: rgba(190, 200, 215, 0.92);
+}
+
+.world-minimap__legend li {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.world-minimap__swatch {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+    flex-shrink: 0;
+}
+
+.world-minimap__swatch--lake {
+    background: rgba(40, 100, 180, 0.75);
+    border: 1px solid rgba(120, 180, 255, 0.6);
+}
+
+.world-minimap__swatch--plane {
+    background: #ff2222;
+    clip-path: polygon(50% 0%, 100% 100%, 0% 100%);
+}
+
+.world-minimap__swatch--spawn {
+    border: 1px solid rgba(255, 255, 255, 0.75);
+    background: transparent;
+}
+
+.world-minimap__swatch--you {
+    border-radius: 50%;
+    background: #ffcc22;
+    border: 1px solid #332200;
+}
+

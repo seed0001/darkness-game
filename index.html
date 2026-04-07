@@ -47,6 +47,18 @@
         <!-- Contextual help popup -->
         <div id="help-popup" role="status" aria-live="polite"></div>
     </div>
+
+    <div id="world-minimap-wrap" class="world-minimap-wrap" aria-label="World map: lake, Airbus, you">
+        <div class="world-minimap__title">Map (world X Z)</div>
+        <canvas id="world-minimap" width="220" height="220"></canvas>
+        <ul class="world-minimap__legend">
+            <li><span class="world-minimap__swatch world-minimap__swatch--lake"></span> Lake</li>
+            <li><span class="world-minimap__swatch world-minimap__swatch--plane"></span> Airbus (red)</li>
+            <li><span class="world-minimap__swatch world-minimap__swatch--spawn"></span> Spawn</li>
+            <li><span class="world-minimap__swatch world-minimap__swatch--you"></span> You</li>
+        </ul>
+    </div>
+
     <canvas id="three-canvas"></canvas>
     <script type="module" src="./main.js"></script>
 </body>
