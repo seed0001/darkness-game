@@ -5,7 +5,6 @@ const BASE_URL = '/models/backpack/';
 const PREFIX = 'Meshy_AI_A_hiking_backpack_wi_0407005713_texture';
 
 const VISUAL_SCALE = 0.034;
-const INTERACT_DIST = 2.85;
 
 /**
  * Hiking backpack: worn on the spine, droppable (B), ground container for rocks/sticks (E).
@@ -25,10 +24,9 @@ export class BackpackManager {
 
         /** @type {'worn' | 'ground'} */
         this.state = 'worn';
-        /** @type {THREE.Mesh[]} */
-        this.inventoryRocks = [];
-        /** @type {THREE.Mesh[]} */
-        this.inventorySticks = [];
+        this.enabled = true;
+        /** @type {(null | { type: 'rock' | 'stick', mesh: THREE.Mesh })[]} */
+        this.slots = new Array(24).fill(null);
 
         this.loaded = false;
         this.readyPromise = this.load();
@@ -95,6 +93,7 @@ export class BackpackManager {
             this.anchor.rotation.set(-0.05, Math.PI, 0);
         }
         this.state = 'worn';
+        this.anchor.visible = this.enabled;
     }
 
     drop(character, camera, world) {
@@ -125,69 +124,105 @@ export class BackpackManager {
         this.attachToCharacter(character);
     }
 
+    setEnabled(enabled) {
+        this.enabled = !!enabled;
+        this.anchor.visible = this.enabled;
+    }
+
+    findFirstEmptySlot() {
+        return this.slots.findIndex((s) => s === null);
+    }
+
+    getSlots() {
+        return this.slots;
+    }
+
+    storeHeldItem(character, preferredSlot = -1) {
+        if (!this.loaded || !this.enabled || !character) return false;
+        let mesh = null;
+        let type = null;
+        if (character.getHeldRock()) {
+            mesh = character.stripHeldRock();
+            type = 'rock';
+            if (mesh) this.world.unregisterPickupRock(mesh);
+        } else if (character.getHeldStick()) {
+            mesh = character.stripHeldStick();
+            type = 'stick';
+            if (mesh) this.world.unregisterPickupStick(mesh);
+        }
+        if (!mesh || !type) return false;
+
+        let idx = preferredSlot;
+        if (idx < 0 || idx >= this.slots.length || this.slots[idx] !== null) {
+            idx = this.findFirstEmptySlot();
+        }
+        if (idx < 0) {
+            if (type === 'rock') character.attachHeldRock(mesh);
+            else character.attachHeldStick(mesh);
+            return false;
+        }
+
+        const rest = mesh.userData.restScale ?? mesh.scale.x;
+        mesh.scale.setScalar(rest * 0.04);
+        mesh.position.set(0, 0, 0);
+        mesh.rotation.set(0, 0, 0);
+        this.inventoryRoot.add(mesh);
+        this.slots[idx] = { type, mesh };
+        return true;
+    }
+
+    storeWorldItem(type, mesh, preferredSlot = -1) {
+        if (!this.loaded || !this.enabled || !mesh) return false;
+        if (type !== 'rock' && type !== 'stick') return false;
+        let idx = preferredSlot;
+        if (idx < 0 || idx >= this.slots.length || this.slots[idx] !== null) {
+            idx = this.findFirstEmptySlot();
+        }
+        if (idx < 0) return false;
+
+        if (type === 'rock') this.world.unregisterPickupRock(mesh);
+        else this.world.unregisterPickupStick(mesh);
+        mesh.removeFromParent();
+        const rest = mesh.userData.restScale ?? mesh.scale.x;
+        mesh.scale.setScalar(rest * 0.04);
+        mesh.position.set(0, 0, 0);
+        mesh.rotation.set(0, 0, 0);
+        this.inventoryRoot.add(mesh);
+        this.slots[idx] = { type, mesh };
+        return true;
+    }
+
+    withdrawFromSlot(character, slotIndex) {
+        if (!this.loaded || !this.enabled || !character) return false;
+        if (slotIndex < 0 || slotIndex >= this.slots.length) return false;
+        if (character.getHeldRock() || character.getHeldStick()) return false;
+        const entry = this.slots[slotIndex];
+        if (!entry) return false;
+
+        this.slots[slotIndex] = null;
+        entry.mesh.removeFromParent();
+        const rest = entry.mesh.userData.restScale ?? 1;
+        entry.mesh.scale.setScalar(rest);
+
+        if (entry.type === 'rock') {
+            character.attachHeldRock(entry.mesh);
+            this.world.registerPickupRock(entry.mesh);
+        } else {
+            character.attachHeldStick(entry.mesh);
+            this.world.registerPickupStick(entry.mesh);
+        }
+        return true;
+    }
+
     distanceToPlayer(character) {
         return character.getPosition().distanceTo(this.anchor.position);
     }
 
-    /**
-     * E near dropped backpack: deposit held item, or withdraw if hands empty.
-     * @returns {boolean} true if handled
-     */
-    tryGroundInteract(character) {
-        if (!this.loaded || this.state !== 'ground' || !character) return false;
-        if (character.isLyingProne()) return false;
-        if (this.distanceToPlayer(character) > INTERACT_DIST) return false;
-
-        if (character.getHeldRock()) {
-            const m = character.stripHeldRock();
-            if (!m) return false;
-            this.world.unregisterPickupRock(m);
-            const rest = m.userData.restScale ?? m.scale.x;
-            m.scale.setScalar(rest * 0.04);
-            m.position.set(0, 0, 0);
-            m.rotation.set(0, 0, 0);
-            this.inventoryRoot.add(m);
-            this.inventoryRocks.push(m);
-            return true;
-        }
-
-        if (character.getHeldStick()) {
-            const m = character.stripHeldStick();
-            if (!m) return false;
-            this.world.unregisterPickupStick(m);
-            const rest = m.userData.restScale ?? m.scale.x;
-            m.scale.setScalar(rest * 0.04);
-            m.position.set(0, 0, 0);
-            m.rotation.set(0, 0, 0);
-            this.inventoryRoot.add(m);
-            this.inventorySticks.push(m);
-            return true;
-        }
-
-        if (this.inventoryRocks.length > 0) {
-            const m = this.inventoryRocks.pop();
-            m.removeFromParent();
-            const rest = m.userData.restScale ?? 1;
-            m.scale.setScalar(rest);
-            character.attachHeldRock(m);
-            this.world.registerPickupRock(m);
-            return true;
-        }
-
-        if (this.inventorySticks.length > 0) {
-            const m = this.inventorySticks.pop();
-            m.removeFromParent();
-            const rest = m.userData.restScale ?? 1;
-            m.scale.setScalar(rest);
-            character.attachHeldStick(m);
-            this.world.registerPickupStick(m);
-            return true;
-        }
-
-        return false;
-    }
-
     totalStoredCount() {
-        return this.inventoryRocks.length + this.inventorySticks.length;
+        let total = 0;
+        for (let i = 0; i < this.slots.length; i++) {
+            if (this.slots[i]) total++;
+        }
+        return total;
     }
 }

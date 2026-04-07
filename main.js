@@ -31,15 +31,17 @@ class Game {
 
         this.renderer = new THREE.WebGLRenderer({
             canvas: document.querySelector('#three-canvas'),
-            antialias: true
+            antialias: false,
+            powerPreference: 'high-performance'
         });
 
         this.renderer.setSize(window.innerWidth, window.innerHeight);
-        this.renderer.setPixelRatio(Math.min(1.5, window.devicePixelRatio || 1));
-        this.renderer.shadowMap.enabled = true;
+        this.renderer.setPixelRatio(Math.min(1.0, window.devicePixelRatio || 1));
+        this.renderer.shadowMap.enabled = false;
         this.renderer.shadowMap.type = THREE.BasicShadowMap;
         this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-        this.renderer.powerPreference = 'high-performance';
+        this.renderer.info.autoReset = true;
+        this.reportGraphicsBackend();
 
         this.world = new WorldManager(this.scene);
 
@@ -83,6 +85,10 @@ class Game {
         this.awaitingSticks = false;
         this.stickPit = [];
         this.firePitInnerRadius = 1.9;
+        this.inventoryOpen = false;
+        this.dogEnabled = true;
+        this.backpackEnabled = true;
+        this.performanceMode = true;
 
         this.raycaster = new THREE.Raycaster();
         this.ndcCenter = new THREE.Vector2(0, 0);
@@ -97,6 +103,7 @@ class Game {
         this.targetDayPhase = 0.0;
 
         this.initLights();
+        this.applyPerformanceMode();
         this.initUI();
         this.initPointerLock();
         this.clock = null;
@@ -161,13 +168,16 @@ class Game {
             if (this.backpackManager.loaded) {
                 this.backpackManager.attachToCharacter(this.character);
             }
+            this.applyFeatureToggles();
 
             setProgress(0.26);
-            setStatus('Loading lake fish…');
-            this.lakeFishUpdate = await loadLakeFish(this.scene).catch((err) => {
-                console.warn('Lake fish:', err);
-                return null;
-            });
+            if (!this.performanceMode) {
+                setStatus('Loading lake fish…');
+                this.lakeFishUpdate = await loadLakeFish(this.scene).catch((err) => {
+                    console.warn('Lake fish:', err);
+                    return null;
+                });
+            }
 
             setProgress(0.28);
             const humanH =
@@ -183,17 +193,19 @@ class Game {
                 setProgress(0.34 + p * 0.58);
             });
 
-            setStatus('Placing scorpions…');
-            setProgress(0.93);
-            await loadScorpions(this.scene, this.world).catch((err) =>
-                console.warn('Scorpions:', err)
-            );
+            if (!this.performanceMode) {
+                setStatus('Placing scorpions…');
+                setProgress(0.93);
+                await loadScorpions(this.scene, this.world).catch((err) =>
+                    console.warn('Scorpions:', err)
+                );
 
-            setStatus('Launching Airbus…');
-            this.airbusUpdate = await loadFlyingAirbus(this.scene, this.world).catch((err) => {
-                console.warn('Airbus:', err);
-                return null;
-            });
+                setStatus('Launching Airbus…');
+                this.airbusUpdate = await loadFlyingAirbus(this.scene, this.world).catch((err) => {
+                    console.warn('Airbus:', err);
+                    return null;
+                });
+            }
 
             setStatus('Preparing graphics…');
             setProgress(0.94);
@@ -247,11 +259,42 @@ class Game {
         this.scene.add(this.sunLight);
     }
 
+    applyPerformanceMode() {
+        if (!this.performanceMode) return;
+        this.renderer.setPixelRatio(Math.min(1.0, window.devicePixelRatio || 1));
+        if (this.world) {
+            this.world.baseChunkRadius = 1;
+            this.world.chunkStreamRadius = 1;
+            this.world.preloadChunkRadius = 2;
+            this.world.chunkGenBudgetPerFrame = 2;
+        }
+        if (this.flashlight) this.flashlight.castShadow = false;
+        if (this.sunLight) this.sunLight.castShadow = false;
+    }
+
     initUI() {
         const startBtn = document.getElementById('start-btn');
         const transitionBtn = document.getElementById('transition-btn');
+        const dogToggle = document.getElementById('toggle-dog');
+        const backpackToggle = document.getElementById('toggle-backpack');
+        const invGrid = document.getElementById('inventory-grid');
+        if (invGrid && invGrid.children.length === 0) {
+            for (let i = 0; i < 24; i++) {
+                const slot = document.createElement('button');
+                slot.type = 'button';
+                slot.className = 'inventory-slot';
+                slot.dataset.slot = String(i);
+                slot.textContent = '';
+                invGrid.appendChild(slot);
+            }
+        }
+        this.refreshInventoryUI();
+        this.applyFeatureToggles();
 
         startBtn.addEventListener('click', () => {
+            this.dogEnabled = !!dogToggle?.checked;
+            this.backpackEnabled = !!backpackToggle?.checked;
+            this.applyFeatureToggles();
             this.controls.lock();
             if (THREE.AudioContext.getContext().state !== 'running') {
                 THREE.AudioContext.getContext().resume();
@@ -260,6 +303,18 @@ class Game {
                 this.ambientWind.beginAfterUserGesture();
             }
         });
+
+        if (invGrid) {
+            invGrid.addEventListener('click', (e) => {
+                const target = e.target;
+                if (!(target instanceof HTMLElement)) return;
+                const slot = target.closest('.inventory-slot');
+                if (!slot) return;
+                const index = Number(slot.dataset.slot);
+                if (!Number.isFinite(index)) return;
+                this.onInventorySlotClick(index);
+            });
+        }
 
         transitionBtn.addEventListener('click', (e) => {
             this.isDay = !this.isDay;
@@ -286,8 +341,8 @@ class Game {
                 this.tryLyingProneOrPickup();
             }
 
-            if (e.key.toLowerCase() === 'b') {
-                this.tryBackpackDropOrWear();
+            if (e.key.toLowerCase() === 'i') {
+                this.toggleInventory();
             }
 
             const playerPos = this.character.isLoaded
@@ -315,6 +370,28 @@ class Game {
         });
 
         window.addEventListener('contextmenu', (e) => e.preventDefault());
+    }
+
+    reportGraphicsBackend() {
+        const gpuEl = document.getElementById('gpu-status');
+        const gl = this.renderer.getContext();
+        const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
+        const vendor = debugInfo ? gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL) : 'Unknown';
+        const renderer = debugInfo ? gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) : 'Unknown renderer';
+        const low = `${vendor} ${renderer}`.toLowerCase();
+        const software = low.includes('swiftshader') || low.includes('software') || low.includes('llvmpipe');
+        const backendText = software ? 'Software renderer detected' : `${vendor} / ${renderer}`;
+
+        if (gpuEl) {
+            gpuEl.textContent = backendText;
+            gpuEl.style.color = software ? '#ffb3a5' : '#95d8a6';
+        }
+        if (software) {
+            this.showHelpPopup('Browser is using software rendering. Enable hardware acceleration in browser settings.', 6500);
+            console.warn('Software renderer detected:', vendor, renderer);
+        } else {
+            console.info('GPU backend:', vendor, renderer);
+        }
     }
 
     tryClickChoppableLog() {
@@ -349,6 +426,15 @@ class Game {
 
     tryLyingProneOrPickup() {
         if (!this.character.isLoaded) return;
+        if (this.inventoryOpen && this.backpackEnabled && this.backpackManager?.loaded) {
+            if (this.backpackManager.storeHeldItem(this.character)) {
+                this.refreshInventoryUI();
+                this.showHelpPopup('Stored item in backpack.', 1600);
+            } else {
+                this.showHelpPopup('Hold a rock or stick to store it.', 1600);
+            }
+            return;
+        }
 
         if (this.character.isLyingProne()) {
             this.character.setLyingProne(false);
@@ -368,33 +454,83 @@ class Game {
         this.tryPickupOrDropRock();
     }
 
-    tryBackpackDropOrWear() {
-        if (!this.character.isLoaded || !this.backpackManager?.loaded) return;
-        if (this.character.isLyingProne()) return;
+    applyFeatureToggles() {
+        if (this.dog?.model) {
+            this.dog.model.visible = this.dogEnabled;
+        }
+        if (this.backpackManager) {
+            this.backpackManager.setEnabled(this.backpackEnabled);
+        }
+        if (!this.backpackEnabled) {
+            this.inventoryOpen = false;
+            this.refreshInventoryUI();
+        }
+    }
 
-        if (this.backpackManager.state === 'worn') {
-            this.backpackManager.drop(this.character, this.camera, this.world);
-            this.showHelpPopup('Backpack on the ground — E to store/take items, B to wear again.', 5200);
+    toggleInventory() {
+        if (!this.backpackEnabled || !this.backpackManager?.loaded) {
+            this.showHelpPopup('Backpack inventory is disabled on the start screen.', 2600);
             return;
         }
+        this.inventoryOpen = !this.inventoryOpen;
+        if (this.inventoryOpen && this.backpackManager.storeHeldItem(this.character)) {
+            this.showHelpPopup('Stored item in backpack.', 1800);
+        }
+        this.refreshInventoryUI();
+    }
 
-        if (this.character.getHeldRock() || this.character.getHeldStick()) {
-            this.showHelpPopup('Put items away or drop them before picking up the backpack (B).', 3800);
-            return;
+    refreshInventoryUI() {
+        const panel = document.getElementById('inventory-panel');
+        const count = document.getElementById('inventory-count');
+        const grid = document.getElementById('inventory-grid');
+        if (!panel || !count || !grid) return;
+
+        panel.classList.toggle('inventory-panel--open', this.inventoryOpen);
+        panel.setAttribute('aria-hidden', this.inventoryOpen ? 'false' : 'true');
+        const slots = this.backpackManager?.getSlots?.() || [];
+        const used = this.backpackManager?.totalStoredCount?.() || 0;
+        count.textContent = `${used} / 24`;
+
+        const kids = Array.from(grid.children);
+        for (let i = 0; i < kids.length; i++) {
+            const el = kids[i];
+            if (!(el instanceof HTMLElement)) continue;
+            const item = slots[i];
+            el.classList.remove('inventory-slot--filled', 'inventory-slot--rock', 'inventory-slot--stick');
+            if (!item) {
+                el.textContent = '';
+                continue;
+            }
+            el.classList.add('inventory-slot--filled', item.type === 'rock' ? 'inventory-slot--rock' : 'inventory-slot--stick');
+            el.textContent = item.type === 'rock' ? 'ROCK' : 'STICK';
+        }
+    }
+
+    onInventorySlotClick(slotIndex) {
+        if (!this.inventoryOpen || !this.backpackEnabled) return;
+        if (!this.character?.isLoaded || !this.backpackManager?.loaded) return;
+
+        const slots = this.backpackManager.getSlots();
+        const clickedFilled = !!slots[slotIndex];
+        let changed = false;
+
+        if (clickedFilled) {
+            changed = this.backpackManager.withdrawFromSlot(this.character, slotIndex);
+            if (!changed) {
+                this.showHelpPopup('Hands are full. Drop or stash held item first.', 1800);
+            }
+        } else {
+            changed = this.backpackManager.storeHeldItem(this.character, slotIndex);
+            if (!changed) {
+                this.showHelpPopup('No held item to store (or slot is unavailable).', 1800);
+            }
         }
 
-        if (this.backpackManager.distanceToPlayer(this.character) < 2.85) {
-            this.backpackManager.wear(this.character);
-            this.showHelpPopup('Backpack equipped.', 2200);
-        }
+        if (changed) this.refreshInventoryUI();
     }
 
     tryPickupOrDropRock() {
         if (!this.character.isLoaded) return;
-
-        if (this.backpackManager?.loaded && this.backpackManager.tryGroundInteract(this.character)) {
-            return;
-        }
 
         if (this.character.getHeldStick()) {
             const mesh = this.character.dropHeldStick(this.scene, this.world, this.camera);
@@ -494,11 +630,21 @@ class Game {
 
         if (best) {
             if (bestIsRock) {
+                if (this.backpackEnabled && this.backpackManager?.loaded && this.backpackManager.storeWorldItem('rock', best)) {
+                    this.refreshInventoryUI();
+                    this.showHelpPopup('Rock added to inventory.');
+                    return;
+                }
                 this.world.unregisterPickupRock(best);
                 this.character.attachHeldRock(best);
                 const remaining = 10 - this.rockRing.length;
                 this.showHelpPopup(`Rock picked up! Need ${remaining} more to build a fire ring.`);
             } else {
+                if (this.backpackEnabled && this.backpackManager?.loaded && this.backpackManager.storeWorldItem('stick', best)) {
+                    this.refreshInventoryUI();
+                    this.showHelpPopup('Stick added to inventory.');
+                    return;
+                }
                 this.world.unregisterPickupStick(best);
                 this.character.attachHeldStick(best);
                 if (this.awaitingSticks) {
@@ -788,7 +934,7 @@ class Game {
         this.camera.aspect = window.innerWidth / window.innerHeight;
         this.camera.updateProjectionMatrix();
         this.renderer.setSize(window.innerWidth, window.innerHeight);
-        this.renderer.setPixelRatio(Math.min(1.5, window.devicePixelRatio || 1));
+        this.renderer.setPixelRatio(Math.min(1.0, window.devicePixelRatio || 1));
         if (this.worldMinimap) this.worldMinimap.resize();
     }
 
@@ -844,16 +990,18 @@ class Game {
         }
         this.sky.update(elapsed, this.camera.position, this.dayPhase);
         
-        const dogPos = this.dog && typeof this.dog.getPosition === 'function' ? this.dog.getPosition() : null;
+        const dogPos = this.dogEnabled && this.dog && typeof this.dog.getPosition === 'function'
+            ? this.dog.getPosition()
+            : null;
 
-        if (this.chickenSpawner) {
+        if (!this.performanceMode && this.chickenSpawner) {
             this.chickenSpawner.update(delta, this.world, dogPos);
         }
-        if (this.butterflySpawner) {
+        if (!this.performanceMode && this.butterflySpawner) {
             this.butterflySpawner.update(delta, updatePos, this.world);
         }
         
-        if (this.dog && this.character.isLoaded) {
+        if (this.dogEnabled && this.dog && this.character.isLoaded) {
             this.dog.update(delta, this.character.getPosition(), this.character.rotation, this.world);
         }
 

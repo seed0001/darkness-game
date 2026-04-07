@@ -20,8 +20,18 @@
         <div id="start-screen">
             <h1>DARKNESS</h1>
             <p>Infinite Navigable Gray-scale World</p>
+            <div class="start-options">
+                <label class="start-option">
+                    <input id="toggle-dog" type="checkbox" checked>
+                    <span>Enable dog companion</span>
+                </label>
+                <label class="start-option">
+                    <input id="toggle-backpack" type="checkbox" checked>
+                    <span>Enable backpack + inventory</span>
+                </label>
+            </div>
             <button id="start-btn">CLICK TO START</button>
-            <p class="controls-hint">WASD · Mouse · Shift sprint · E pick up / backpack stash (when dropped) · B drop or wear backpack · E at lake shore: lie down / stand · fire ring + sticks · axe · Q throw · L flashlight · 1 day/night</p>
+            <p class="controls-hint">WASD · Mouse · Shift sprint · E pick up/drop · I inventory (24 slots) · E at lake shore: lie down / stand · fire ring + sticks · axe · Q throw · L flashlight · 1 day/night</p>
         </div>
         <div id="hud" style="display: none;">
             <div class="toolbar">
@@ -30,7 +40,7 @@
                 <input type="file" id="import-input" accept=".json" style="display: none;">
             </div>
             <div id="stats">
-                Chunks: <span id="chunk-count">0</span> | Pos: <span id="player-pos">0, 0</span> | <button id="transition-btn">TRANSITION</button>
+                Chunks: <span id="chunk-count">0</span> | Pos: <span id="player-pos">0, 0</span> | GPU: <span id="gpu-status">Detecting...</span> | <button id="transition-btn">TRANSITION</button>
             </div>
         </div>
         <div id="crosshair"></div>
@@ -46,6 +56,15 @@
 
         <!-- Contextual help popup -->
         <div id="help-popup" role="status" aria-live="polite"></div>
+
+        <div id="inventory-panel" class="inventory-panel" aria-hidden="true">
+            <div class="inventory-panel__header">
+                <h3>Inventory</h3>
+                <span id="inventory-count">0 / 24</span>
+            </div>
+            <div id="inventory-grid" class="inventory-grid"></div>
+            <p class="inventory-panel__hint">I close · click item slot to take · click empty slot to store held item</p>
+        </div>
     </div>
 
     <div id="world-minimap-wrap" class="world-minimap-wrap" aria-label="World map: lake, Airbus, you">
