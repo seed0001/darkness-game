@@ -30,6 +30,55 @@
                     <span>Enable backpack + inventory</span>
                 </label>
             </div>
+            <div class="start-options start-options--extras">
+                <p class="start-options__heading">Performance</p>
+                <label class="start-option">
+                    <input id="toggle-performance" type="checkbox" checked>
+                    <span>Reduced terrain load (smaller draw distance, no dynamic shadows)</span>
+                </label>
+            </div>
+            <div class="start-options start-options--extras">
+                <p class="start-options__heading">Animated world</p>
+                <label class="start-option">
+                    <input id="toggle-lake-fish" type="checkbox">
+                    <span>Lake fish</span>
+                </label>
+                <label class="start-option">
+                    <input id="toggle-chickens" type="checkbox">
+                    <span>Wild chickens</span>
+                </label>
+                <label class="start-option">
+                    <input id="toggle-butterflies" type="checkbox">
+                    <span>Butterflies (keys 4–6 spawn more)</span>
+                </label>
+                <label class="start-option">
+                    <input id="toggle-scorpions" type="checkbox">
+                    <span>Scorpions</span>
+                </label>
+                <label class="start-option">
+                    <input id="toggle-airbus" type="checkbox">
+                    <span>Flying Airbus</span>
+                </label>
+            </div>
+            <div class="character-select" role="radiogroup" aria-label="Choose character">
+                <p class="character-select__title">Character</p>
+                <div class="character-select__cards">
+                    <label class="character-card">
+                        <input type="radio" name="character" value="hillbilly" checked>
+                        <span class="character-card__body">
+                            <span class="character-card__name">Hillbilly</span>
+                            <span class="character-card__hint">Original survivor</span>
+                        </span>
+                    </label>
+                    <label class="character-card">
+                        <input type="radio" name="character" value="frontline_soldier">
+                        <span class="character-card__body">
+                            <span class="character-card__name">Frontline Soldier</span>
+                            <span class="character-card__hint">Tactical gear</span>
+                        </span>
+                    </label>
+                </div>
+            </div>
             <button id="start-btn">CLICK TO START</button>
             <p class="controls-hint">WASD · Mouse · Shift sprint · E pick up/drop · I inventory (24 slots) · E at lake shore: lie down / stand · fire ring + sticks · axe · Q throw · L flashlight · 1 day/night</p>
         </div>

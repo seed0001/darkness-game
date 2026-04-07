@@ -2,8 +2,45 @@ import * as THREE from 'three';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 import { LAKE_CX, LAKE_CZ } from './world.js';
 
-const MODEL_PATH = '/models/hillbilly/';
-const FILE_PREFIX = 'Meshy_AI_t_pose_of_a_hillbilly_biped_';
+/** @typedef {{ id: string, label: string, modelPath: string, filePrefix: string, useNormalMap?: boolean, modelScale?: number, animations: Record<string, string> }} CharacterProfile */
+
+/** @type {Record<string, CharacterProfile>} */
+export const CHARACTER_PROFILES = {
+    hillbilly: {
+        id: 'hillbilly',
+        label: 'Hillbilly',
+        modelPath: '/models/hillbilly/',
+        filePrefix: 'Meshy_AI_t_pose_of_a_hillbilly_biped_',
+        useNormalMap: false,
+        modelScale: 0.05,
+        animations: {
+            idle: 'Animation_Idle_withSkin.fbx',
+            walk: 'Animation_Walking_withSkin.fbx',
+            run: 'Animation_Running_withSkin.fbx',
+            runSlow: 'Animation_Run_03_withSkin.fbx',
+            fall: 'Animation_Dead_withSkin.fbx'
+        }
+    },
+    frontline_soldier: {
+        id: 'frontline_soldier',
+        label: 'Frontline Soldier',
+        modelPath: '/models/frontline_soldier/',
+        filePrefix: 'Meshy_AI_Frontline_Soldier_biped_',
+        useNormalMap: true,
+        modelScale: 0.05,
+        animations: {
+            idle: 'Animation_Idle_02_withSkin.fbx',
+            walk: 'Animation_Walking_withSkin.fbx',
+            run: 'Animation_Running_withSkin.fbx',
+            runSlow: 'Animation_Running_withSkin.fbx',
+            fall: 'Animation_Jump_with_Arms_Open_withSkin.fbx'
+        }
+    }
+};
+
+export const DEFAULT_CHARACTER_ID = 'hillbilly';
+
+export const CHARACTER_STORAGE_KEY = 'darkness-character';
 
 export class Character {
     constructor(scene) {
@@ -13,14 +50,16 @@ export class Character {
         this.animations = {};
         this.currentAction = null;
         this.currentState = 'idle';
-        
+
         this.position = new THREE.Vector3(0, 0, 0);
         this.rotation = 0;
         this.targetRotation = 0;
-        
+
         this.velocity = new THREE.Vector3();
         this.isLoaded = false;
-        
+        /** @type {string | null} */
+        this.profileId = null;
+
         this.rightHand = null;
         /** Upper spine / chest bone for backpack attachment (if present in rig). */
         this.backBone = null;
@@ -32,113 +71,177 @@ export class Character {
         this.lyingProne = false;
         this.proneBellyClearance = 0.14;
 
-        this.readyPromise = this.load();
+        /** Resolved immediately; character mesh loads on demand via {@link loadCharacter}. */
+        this.readyPromise = Promise.resolve();
     }
 
-    async load() {
+    /**
+     * Loads or swaps the playable character. Call after the user picks a profile on the start screen.
+     * @param {string} profileId key of {@link CHARACTER_PROFILES}
+     */
+    async loadCharacter(profileId) {
+        const profile = CHARACTER_PROFILES[profileId];
+        if (!profile) {
+            throw new Error(`Unknown character profile: ${profileId}`);
+        }
+
+        if (this.isLoaded && this.profileId === profileId) {
+            return;
+        }
+
+        this.disposeModel();
+
         const loader = new FBXLoader();
         const textureLoader = new THREE.TextureLoader();
 
-        try {
-            const baseTexture = await textureLoader.loadAsync(MODEL_PATH + FILE_PREFIX + 'texture_0.png');
-            const metallicTexture = await textureLoader.loadAsync(MODEL_PATH + FILE_PREFIX + 'texture_0_metallic.png');
-            const roughnessTexture = await textureLoader.loadAsync(MODEL_PATH + FILE_PREFIX + 'texture_0_roughness.png');
+        const baseTexture = await textureLoader.loadAsync(profile.modelPath + profile.filePrefix + 'texture_0.png');
+        baseTexture.colorSpace = THREE.SRGBColorSpace;
+        const metallicTexture = await textureLoader.loadAsync(profile.modelPath + profile.filePrefix + 'texture_0_metallic.png');
+        const roughnessTexture = await textureLoader.loadAsync(profile.modelPath + profile.filePrefix + 'texture_0_roughness.png');
 
-            const baseFBX = await loader.loadAsync(MODEL_PATH + FILE_PREFIX + 'Character_output.fbx');
-            
-            this.model = baseFBX;
-            this.model.scale.set(0.05, 0.05, 0.05);
-            
-            this.model.traverse((child) => {
-                if (child.isMesh) {
-                    child.castShadow = true;
-                    child.receiveShadow = true;
-                    child.material = new THREE.MeshStandardMaterial({
-                        map: baseTexture,
-                        metalnessMap: metallicTexture,
-                        roughnessMap: roughnessTexture,
-                        metalness: 0.5,
-                        roughness: 0.5
-                    });
+        /** @type {THREE.Texture | null} */
+        let normalTexture = null;
+        if (profile.useNormalMap) {
+            try {
+                normalTexture = await textureLoader.loadAsync(profile.modelPath + profile.filePrefix + 'texture_0_normal.png');
+            } catch {
+                normalTexture = null;
+            }
+        }
+
+        const baseFBX = await loader.loadAsync(profile.modelPath + profile.filePrefix + 'Character_output.fbx');
+
+        this.model = baseFBX;
+        const sc = profile.modelScale ?? 0.05;
+        this.model.scale.set(sc, sc, sc);
+
+        this.model.traverse((child) => {
+            if (child.isMesh) {
+                child.castShadow = true;
+                child.receiveShadow = true;
+                const matOpts = {
+                    map: baseTexture,
+                    metalnessMap: metallicTexture,
+                    roughnessMap: roughnessTexture,
+                    metalness: 0.5,
+                    roughness: 0.5
+                };
+                if (normalTexture) {
+                    matOpts.normalMap = normalTexture;
                 }
-                
+                child.material = new THREE.MeshStandardMaterial(matOpts);
+            }
+
+            if (child.isBone) {
+                const name = child.name.toLowerCase();
+                if (
+                    (name.includes('hand') && name.includes('r')) ||
+                    (name.includes('right') && name.includes('hand')) ||
+                    name.includes('rhand') ||
+                    name.includes('hand_r')
+                ) {
+                    this.rightHand = child;
+                    console.log('Found right hand bone:', child.name);
+                }
+                if (name.includes('spine') && (name.includes('2') || name.includes('02'))) {
+                    this.backBone = child;
+                }
+            }
+        });
+        if (!this.backBone) {
+            this.model.traverse((child) => {
                 if (child.isBone) {
                     const name = child.name.toLowerCase();
-                    if (name.includes('hand') && name.includes('r') ||
-                        (name.includes('right') && name.includes('hand')) ||
-                        name.includes('rhand') || name.includes('hand_r')) {
-                        this.rightHand = child;
-                        console.log('Found right hand bone:', child.name);
-                    }
-                    if (name.includes('spine') && (name.includes('2') || name.includes('02'))) {
+                    if (name.includes('spine') && (name.includes('1') || name.includes('01'))) {
                         this.backBone = child;
                     }
                 }
             });
-            if (!this.backBone) {
-                this.model.traverse((child) => {
-                    if (child.isBone) {
-                        const name = child.name.toLowerCase();
-                        if (name.includes('spine') && (name.includes('1') || name.includes('01'))) {
-                            this.backBone = child;
-                        }
-                    }
-                });
-            }
-            if (!this.backBone) {
-                this.model.traverse((child) => {
-                    if (child.isBone && child.name.toLowerCase().includes('spine')) {
-                        this.backBone = child;
-                    }
-                });
-            }
-            if (this.backBone) {
-                console.log('Back / spine bone for backpack:', this.backBone.name);
-            }
+        }
+        if (!this.backBone) {
+            this.model.traverse((child) => {
+                if (child.isBone && child.name.toLowerCase().includes('spine')) {
+                    this.backBone = child;
+                }
+            });
+        }
+        if (this.backBone) {
+            console.log('Back / spine bone for backpack:', this.backBone.name);
+        }
 
-            this.scene.add(this.model);
-            
-            this.mixer = new THREE.AnimationMixer(this.model);
+        this.scene.add(this.model);
 
-            const animationFiles = {
-                idle: 'Animation_Idle_withSkin.fbx',
-                walk: 'Animation_Walking_withSkin.fbx',
-                run: 'Animation_Running_withSkin.fbx',
-                runSlow: 'Animation_Run_03_withSkin.fbx',
-                fall: 'Animation_Dead_withSkin.fbx'
-            };
+        this.mixer = new THREE.AnimationMixer(this.model);
 
-            for (const [name, file] of Object.entries(animationFiles)) {
-                const animFBX = await loader.loadAsync(MODEL_PATH + FILE_PREFIX + file);
-                if (animFBX.animations.length > 0) {
-                    const clip = animFBX.animations[0];
-                    clip.name = name;
-                    this.animations[name] = this.mixer.clipAction(clip);
-                    
-                    if (name === 'fall') {
-                        this.animations[name].setLoop(THREE.LoopOnce);
-                        this.animations[name].clampWhenFinished = true;
+        const fileToClip = new Map();
+        for (const [name, file] of Object.entries(profile.animations)) {
+            let clip;
+            if (!fileToClip.has(file)) {
+                const animFBX = await loader.loadAsync(profile.modelPath + profile.filePrefix + file);
+                if (animFBX.animations.length === 0) continue;
+                clip = animFBX.animations[0];
+                fileToClip.set(file, clip);
+            } else {
+                clip = fileToClip.get(file).clone();
+            }
+            clip.name = name;
+            this.animations[name] = this.mixer.clipAction(clip);
+
+            if (name === 'fall') {
+                this.animations[name].setLoop(THREE.LoopOnce);
+                this.animations[name].clampWhenFinished = true;
+            }
+        }
+
+        if (this.animations.idle) {
+            this.animations.idle.play();
+            this.currentAction = this.animations.idle;
+        }
+
+        this.model.updateMatrixWorld(true);
+        const bounds = new THREE.Box3().setFromObject(this.model);
+        const size = new THREE.Vector3();
+        bounds.getSize(size);
+        this.heightWorld = Math.max(size.y, 0.01);
+
+        this.profileId = profileId;
+        this.isLoaded = true;
+        console.log('Character loaded successfully:', profile.label);
+    }
+
+    disposeModel() {
+        if (this.mixer) {
+            this.mixer.stopAllAction();
+            this.mixer = null;
+            this.animations = {};
+            this.currentAction = null;
+            this.currentState = 'idle';
+        }
+
+        if (this.model) {
+            this.heldRock = null;
+            this.heldStick = null;
+            this.lyingProne = false;
+
+            this.model.removeFromParent();
+            this.model.traverse((child) => {
+                if (child.isMesh) {
+                    child.geometry?.dispose();
+                    const mat = child.material;
+                    if (Array.isArray(mat)) {
+                        mat.forEach((m) => m.dispose());
+                    } else {
+                        mat?.dispose();
                     }
                 }
-            }
-
-            if (this.animations.idle) {
-                this.animations.idle.play();
-                this.currentAction = this.animations.idle;
-            }
-
-            this.model.updateMatrixWorld(true);
-            const bounds = new THREE.Box3().setFromObject(this.model);
-            const size = new THREE.Vector3();
-            bounds.getSize(size);
-            this.heightWorld = Math.max(size.y, 0.01);
-
-            this.isLoaded = true;
-            console.log('Character loaded successfully');
-
-        } catch (error) {
-            console.error('Error loading character:', error);
+            });
+            this.model = null;
         }
+
+        this.rightHand = null;
+        this.backBone = null;
+        this.isLoaded = false;
+        this.profileId = null;
     }
 
     setLyingProne(down) {

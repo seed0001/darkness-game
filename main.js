@@ -4,7 +4,12 @@ import { WorldManager, isNearLakeWater } from './world.js';
 import { Controls } from './controls.js';
 import { SkyDome } from './sky.js';
 import { Dog } from './dog.js';
-import { Character } from './character.js';
+import {
+    Character,
+    CHARACTER_PROFILES,
+    CHARACTER_STORAGE_KEY,
+    DEFAULT_CHARACTER_ID
+} from './character.js';
 import { ChickenSpawner } from './chicken.js';
 import { ButterflySpawner } from './butterfly.js';
 import { ThrowingAxe } from './axe.js';
@@ -15,6 +20,22 @@ import { loadScorpions } from './scorpion.js';
 import { loadFlyingAirbus } from './airbus.js';
 import { WorldMinimap } from './minimap.js';
 import { BackpackManager } from './backpack.js';
+
+/** Persisted start-screen options (animation / world extras). */
+const OPT = {
+    performance: 'darkness-opt-performance',
+    lakeFish: 'darkness-opt-lake-fish',
+    chickens: 'darkness-opt-chickens',
+    butterflies: 'darkness-opt-butterflies',
+    scorpions: 'darkness-opt-scorpions',
+    airbus: 'darkness-opt-airbus'
+};
+
+function readStoredBool(key, defaultValue) {
+    const v = localStorage.getItem(key);
+    if (v === null) return defaultValue;
+    return v === 'true';
+}
 
 class Game {
     constructor() {
@@ -88,7 +109,12 @@ class Game {
         this.inventoryOpen = false;
         this.dogEnabled = true;
         this.backpackEnabled = true;
-        this.performanceMode = true;
+        /** Chunk radius + shadow reduction; read before first preload (next session reflects start-screen toggle). */
+        this.performanceMode = readStoredBool(OPT.performance, true);
+        /** Updated when the player clicks Start; gates spawner tick / keyboard spawns. */
+        this.chickensEnabled = false;
+        this.butterfliesEnabled = false;
+        this._scorpionsPlaced = false;
 
         this.raycaster = new THREE.Raycaster();
         this.ndcCenter = new THREE.Vector2(0, 0);
@@ -153,9 +179,6 @@ class Game {
 
             await Promise.all([
                 this.world.whenCoreAssetsReady(),
-                this.character.readyPromise.catch((err) => {
-                    console.warn('Character load issue — using default height for tree scale.', err);
-                }),
                 this.axe.readyPromise.catch((err) => console.warn('Axe load:', err)),
                 this.dog.readyPromise.catch((err) => console.warn('Dog load:', err)),
                 this.backpackManager.readyPromise.catch((err) => console.warn('Backpack load:', err)),
@@ -165,19 +188,9 @@ class Game {
                 new FBXLoader().loadAsync('/models/chicken.fbx').catch(() => {})
             ]);
 
-            if (this.backpackManager.loaded) {
-                this.backpackManager.attachToCharacter(this.character);
-            }
             this.applyFeatureToggles();
 
             setProgress(0.26);
-            if (!this.performanceMode) {
-                setStatus('Loading lake fish…');
-                this.lakeFishUpdate = await loadLakeFish(this.scene).catch((err) => {
-                    console.warn('Lake fish:', err);
-                    return null;
-                });
-            }
 
             setProgress(0.28);
             const humanH =
@@ -192,20 +205,6 @@ class Game {
             await this.world.preloadWorldAt(new THREE.Vector3(0, 0, 0), (p) => {
                 setProgress(0.34 + p * 0.58);
             });
-
-            if (!this.performanceMode) {
-                setStatus('Placing scorpions…');
-                setProgress(0.93);
-                await loadScorpions(this.scene, this.world).catch((err) =>
-                    console.warn('Scorpions:', err)
-                );
-
-                setStatus('Launching Airbus…');
-                this.airbusUpdate = await loadFlyingAirbus(this.scene, this.world).catch((err) => {
-                    console.warn('Airbus:', err);
-                    return null;
-                });
-            }
 
             setStatus('Preparing graphics…');
             setProgress(0.94);
@@ -226,6 +225,38 @@ class Game {
         if (overlay) {
             overlay.classList.add('loading-screen--hidden');
         }
+    }
+
+    /**
+     * Loads lake fish, scorpions, and/or Airbus after the player confirms start-screen toggles.
+     */
+    async loadOptionalAnimatedContent({ lakeFish, scorpions, airbus }) {
+        const tasks = [];
+        if (lakeFish && !this.lakeFishUpdate) {
+            tasks.push(
+                loadLakeFish(this.scene).then((fn) => {
+                    this.lakeFishUpdate = fn;
+                })
+            );
+        }
+        if (scorpions && !this._scorpionsPlaced) {
+            this._scorpionsPlaced = true;
+            tasks.push(
+                loadScorpions(this.scene, this.world).catch((err) => console.warn('Scorpions:', err))
+            );
+        }
+        if (airbus && !this.airbusUpdate) {
+            tasks.push(
+                loadFlyingAirbus(this.scene, this.world)
+                    .then((update) => {
+                        this.airbusUpdate = update;
+                    })
+                    .catch((err) => {
+                        console.warn('Airbus:', err);
+                    })
+            );
+        }
+        await Promise.all(tasks);
     }
 
     startGameLoop() {
@@ -277,6 +308,27 @@ class Game {
         const transitionBtn = document.getElementById('transition-btn');
         const dogToggle = document.getElementById('toggle-dog');
         const backpackToggle = document.getElementById('toggle-backpack');
+        const perfToggle = document.getElementById('toggle-performance');
+        const lakeFishToggle = document.getElementById('toggle-lake-fish');
+        const chickensToggle = document.getElementById('toggle-chickens');
+        const butterfliesToggle = document.getElementById('toggle-butterflies');
+        const scorpionsToggle = document.getElementById('toggle-scorpions');
+        const airbusToggle = document.getElementById('toggle-airbus');
+
+        if (perfToggle) perfToggle.checked = this.performanceMode;
+        if (lakeFishToggle) lakeFishToggle.checked = readStoredBool(OPT.lakeFish, false);
+        if (chickensToggle) chickensToggle.checked = readStoredBool(OPT.chickens, false);
+        if (butterfliesToggle) butterfliesToggle.checked = readStoredBool(OPT.butterflies, false);
+        if (scorpionsToggle) scorpionsToggle.checked = readStoredBool(OPT.scorpions, false);
+        if (airbusToggle) airbusToggle.checked = readStoredBool(OPT.airbus, false);
+
+        const characterRadios = document.querySelectorAll('input[name="character"]');
+        const savedChar = localStorage.getItem(CHARACTER_STORAGE_KEY);
+        if (savedChar && CHARACTER_PROFILES[savedChar]) {
+            characterRadios.forEach((r) => {
+                if (r instanceof HTMLInputElement) r.checked = r.value === savedChar;
+            });
+        }
         const invGrid = document.getElementById('inventory-grid');
         if (invGrid && invGrid.children.length === 0) {
             for (let i = 0; i < 24; i++) {
@@ -291,9 +343,60 @@ class Game {
         this.refreshInventoryUI();
         this.applyFeatureToggles();
 
-        startBtn.addEventListener('click', () => {
+        startBtn.addEventListener('click', async () => {
+            const selected =
+                document.querySelector('input[name="character"]:checked')?.value ?? DEFAULT_CHARACTER_ID;
             this.dogEnabled = !!dogToggle?.checked;
             this.backpackEnabled = !!backpackToggle?.checked;
+
+            if (perfToggle) {
+                localStorage.setItem(OPT.performance, perfToggle.checked ? 'true' : 'false');
+            }
+            const lakeFishOn = !!lakeFishToggle?.checked;
+            const chickensOn = !!chickensToggle?.checked;
+            const butterfliesOn = !!butterfliesToggle?.checked;
+            const scorpionsOn = !!scorpionsToggle?.checked;
+            const airbusOn = !!airbusToggle?.checked;
+            localStorage.setItem(OPT.lakeFish, lakeFishOn ? 'true' : 'false');
+            localStorage.setItem(OPT.chickens, chickensOn ? 'true' : 'false');
+            localStorage.setItem(OPT.butterflies, butterfliesOn ? 'true' : 'false');
+            localStorage.setItem(OPT.scorpions, scorpionsOn ? 'true' : 'false');
+            localStorage.setItem(OPT.airbus, airbusOn ? 'true' : 'false');
+
+            this.chickensEnabled = chickensOn;
+            this.butterfliesEnabled = butterfliesOn;
+
+            const prevLabel = startBtn.textContent;
+            startBtn.disabled = true;
+            startBtn.textContent = 'Loading character…';
+            try {
+                await this.character.loadCharacter(selected);
+                localStorage.setItem(CHARACTER_STORAGE_KEY, selected);
+                if (this.backpackManager.loaded) {
+                    this.backpackManager.attachToCharacter(this.character);
+                }
+            } catch (err) {
+                console.error('Character load failed:', err);
+                this.showHelpPopup(
+                    'Could not load that character. Check that model files exist under public/models/.',
+                    7000
+                );
+                startBtn.disabled = false;
+                startBtn.textContent = prevLabel;
+                return;
+            }
+
+            startBtn.textContent = 'Loading world extras…';
+            try {
+                await this.loadOptionalAnimatedContent({
+                    lakeFish: lakeFishOn,
+                    scorpions: scorpionsOn,
+                    airbus: airbusOn
+                });
+            } catch (err) {
+                console.warn('Optional world content:', err);
+            }
+
             this.applyFeatureToggles();
             this.controls.lock();
             if (THREE.AudioContext.getContext().state !== 'running') {
@@ -302,6 +405,8 @@ class Game {
             if (this.ambientWind) {
                 this.ambientWind.beginAfterUserGesture();
             }
+            startBtn.disabled = false;
+            startBtn.textContent = prevLabel;
         });
 
         if (invGrid) {
@@ -349,13 +454,13 @@ class Game {
                 ? this.character.getPosition()
                 : new THREE.Vector3();
 
-            if (e.key === '4' && this.butterflySpawner) {
+            if (e.key === '4' && this.butterfliesEnabled && this.butterflySpawner) {
                 this.butterflySpawner.spawnOneNear(playerPos, this.world, 2);
             }
-            if (e.key === '5' && this.butterflySpawner) {
+            if (e.key === '5' && this.butterfliesEnabled && this.butterflySpawner) {
                 this.butterflySpawner.spawnOneNear(playerPos, this.world, 3);
             }
-            if (e.key === '6' && this.butterflySpawner) {
+            if (e.key === '6' && this.butterfliesEnabled && this.butterflySpawner) {
                 this.butterflySpawner.spawnOneNear(playerPos, this.world, 1);
             }
         });
@@ -994,10 +1099,10 @@ class Game {
             ? this.dog.getPosition()
             : null;
 
-        if (!this.performanceMode && this.chickenSpawner) {
+        if (this.chickensEnabled && this.chickenSpawner) {
             this.chickenSpawner.update(delta, this.world, dogPos);
         }
-        if (!this.performanceMode && this.butterflySpawner) {
+        if (this.butterfliesEnabled && this.butterflySpawner) {
             this.butterflySpawner.update(delta, updatePos, this.world);
         }
         

@@ -98,6 +98,88 @@ body {
     accent-color: #8ab492;
 }
 
+.start-options--extras {
+    margin-top: 0.35rem;
+}
+
+.start-options__heading {
+    font-size: 0.75rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: #888;
+    margin-bottom: 0.45rem;
+    width: 100%;
+    text-align: left;
+}
+
+.character-select {
+    margin: 0 auto 1.25rem;
+    width: 100%;
+    max-width: 28rem;
+    text-align: left;
+}
+
+.character-select__title {
+    font-size: 0.75rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: #888;
+    margin-bottom: 0.65rem;
+}
+
+.character-select__cards {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.65rem;
+}
+
+.character-card {
+    display: block;
+    cursor: pointer;
+    border-radius: 6px;
+    border: 1px solid #4a4a4a;
+    background: rgba(30, 30, 30, 0.6);
+    transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.character-card:hover {
+    border-color: #6a8a72;
+    background: rgba(40, 48, 42, 0.75);
+}
+
+.character-card input {
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.character-card:has(input:checked) {
+    border-color: #8ab492;
+    background: rgba(50, 62, 54, 0.85);
+    box-shadow: 0 0 0 1px rgba(138, 180, 146, 0.35);
+}
+
+.character-card__body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    padding: 0.75rem 0.85rem;
+    pointer-events: none;
+}
+
+.character-card__name {
+    font-size: 0.95rem;
+    font-weight: 500;
+    color: #e8e8e8;
+}
+
+.character-card__hint {
+    font-size: 0.75rem;
+    color: #8a8a8a;
+    line-height: 1.25;
+}
+
 #hud {
     position: absolute;
     top: 2rem;
