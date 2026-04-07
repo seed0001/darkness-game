@@ -22,6 +22,8 @@ export class Character {
         this.isLoaded = false;
         
         this.rightHand = null;
+        /** Upper spine / chest bone for backpack attachment (if present in rig). */
+        this.backBone = null;
         this.heldRock = null;
         this.heldStick = null;
         this.heightWorld = 1.65;
@@ -62,14 +64,37 @@ export class Character {
                 
                 if (child.isBone) {
                     const name = child.name.toLowerCase();
-                    if (name.includes('hand') && name.includes('r') || 
-                        name.includes('right') && name.includes('hand') ||
+                    if (name.includes('hand') && name.includes('r') ||
+                        (name.includes('right') && name.includes('hand')) ||
                         name.includes('rhand') || name.includes('hand_r')) {
                         this.rightHand = child;
                         console.log('Found right hand bone:', child.name);
                     }
+                    if (name.includes('spine') && (name.includes('2') || name.includes('02'))) {
+                        this.backBone = child;
+                    }
                 }
             });
+            if (!this.backBone) {
+                this.model.traverse((child) => {
+                    if (child.isBone) {
+                        const name = child.name.toLowerCase();
+                        if (name.includes('spine') && (name.includes('1') || name.includes('01'))) {
+                            this.backBone = child;
+                        }
+                    }
+                });
+            }
+            if (!this.backBone) {
+                this.model.traverse((child) => {
+                    if (child.isBone && child.name.toLowerCase().includes('spine')) {
+                        this.backBone = child;
+                    }
+                });
+            }
+            if (this.backBone) {
+                console.log('Back / spine bone for backpack:', this.backBone.name);
+            }
 
             this.scene.add(this.model);
             
@@ -189,6 +214,24 @@ export class Character {
 
     getHeldRock() {
         return this.heldRock;
+    }
+
+    /** Remove held rock from hand without placing in world (e.g. stow in backpack). */
+    stripHeldRock() {
+        if (!this.heldRock) return null;
+        const m = this.heldRock;
+        this.heldRock = null;
+        m.removeFromParent();
+        return m;
+    }
+
+    /** Remove held stick from hand without placing in world. */
+    stripHeldStick() {
+        if (!this.heldStick) return null;
+        const m = this.heldStick;
+        this.heldStick = null;
+        m.removeFromParent();
+        return m;
     }
 
     attachHeldRock(mesh) {

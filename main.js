@@ -12,6 +12,7 @@ import { FireManager, preloadFireMedia } from './fire.js';
 import { AmbientWind } from './ambientWind.js';
 import { loadLakeFish } from './lakeFish.js';
 import { loadScorpions } from './scorpion.js';
+import { BackpackManager } from './backpack.js';
 
 class Game {
     constructor() {
@@ -46,6 +47,7 @@ class Game {
         
         this.sky = new SkyDome(this.scene);
         this.dog = new Dog(this.scene);
+        this.backpackManager = new BackpackManager(this.scene, this.world);
         
         const getPlayerPos = () => this.character.isLoaded ? this.character.getPosition() : new THREE.Vector3(0, 0, 0);
         
@@ -134,11 +136,16 @@ class Game {
                 }),
                 this.axe.readyPromise.catch((err) => console.warn('Axe load:', err)),
                 this.dog.readyPromise.catch((err) => console.warn('Dog load:', err)),
+                this.backpackManager.readyPromise.catch((err) => console.warn('Backpack load:', err)),
                 this.ambientWind.bufferPromise,
                 preloadFireMedia(),
                 new FBXLoader().loadAsync('/models/butterfly.fbx').catch(() => {}),
                 new FBXLoader().loadAsync('/models/chicken.fbx').catch(() => {})
             ]);
+
+            if (this.backpackManager.loaded) {
+                this.backpackManager.attachToCharacter(this.character);
+            }
 
             setProgress(0.26);
             setStatus('Loading lake fish…');
@@ -258,6 +265,10 @@ class Game {
                 this.tryLyingProneOrPickup();
             }
 
+            if (e.key.toLowerCase() === 'b') {
+                this.tryBackpackDropOrWear();
+            }
+
             const playerPos = this.character.isLoaded
                 ? this.character.getPosition()
                 : new THREE.Vector3();
@@ -336,8 +347,33 @@ class Game {
         this.tryPickupOrDropRock();
     }
 
+    tryBackpackDropOrWear() {
+        if (!this.character.isLoaded || !this.backpackManager?.loaded) return;
+        if (this.character.isLyingProne()) return;
+
+        if (this.backpackManager.state === 'worn') {
+            this.backpackManager.drop(this.character, this.camera, this.world);
+            this.showHelpPopup('Backpack on the ground — E to store/take items, B to wear again.', 5200);
+            return;
+        }
+
+        if (this.character.getHeldRock() || this.character.getHeldStick()) {
+            this.showHelpPopup('Put items away or drop them before picking up the backpack (B).', 3800);
+            return;
+        }
+
+        if (this.backpackManager.distanceToPlayer(this.character) < 2.85) {
+            this.backpackManager.wear(this.character);
+            this.showHelpPopup('Backpack equipped.', 2200);
+        }
+    }
+
     tryPickupOrDropRock() {
         if (!this.character.isLoaded) return;
+
+        if (this.backpackManager?.loaded && this.backpackManager.tryGroundInteract(this.character)) {
+            return;
+        }
 
         if (this.character.getHeldStick()) {
             const mesh = this.character.dropHeldStick(this.scene, this.world, this.camera);
