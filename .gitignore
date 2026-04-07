@@ -3,3 +3,7 @@ node_modules
 dist
 dist-ssr
 *.local
+
+# Meshy export working dirs — served copies live under public/models/
+Meshy_AI_Frontline_Soldier_biped/
+chance_fbx/
