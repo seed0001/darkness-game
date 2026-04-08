@@ -11,6 +11,7 @@ import {
     DEFAULT_CHARACTER_ID
 } from './character.js';
 import { ChickenSpawner } from './chicken.js';
+import { DeerSpawner } from './deer.js';
 import { ButterflySpawner } from './butterfly.js';
 import { ThrowingAxe } from './axe.js';
 import { FireManager, preloadFireMedia } from './fire.js';
@@ -55,6 +56,7 @@ const OPT = {
     performance: 'darkness-opt-performance',
     lakeFish: 'darkness-opt-lake-fish',
     chickens: 'darkness-opt-chickens',
+    deer: 'darkness-opt-deer',
     butterflies: 'darkness-opt-butterflies',
     scorpions: 'darkness-opt-scorpions',
     airbus: 'darkness-opt-airbus',
@@ -127,6 +129,7 @@ class Game {
         const getPlayerPos = () => this.character.isLoaded ? this.character.getPosition() : new THREE.Vector3(0, 0, 0);
         
         this.chickenSpawner = new ChickenSpawner(this.scene, getPlayerPos);
+        this.deerSpawner = new DeerSpawner(this.scene, getPlayerPos);
         this.butterflySpawner = new ButterflySpawner(this.scene, this.world);
         
         const getPlayerDir = () => {
@@ -172,6 +175,8 @@ class Game {
         this.performanceMode = readStoredBool(OPT.performance, true);
         /** Updated when the player clicks Start; gates spawner tick / keyboard spawns. */
         this.chickensEnabled = false;
+        /** Default on so deer are visible in new sessions. */
+        this.deerEnabled = readStoredBool(OPT.deer, true);
         this.butterfliesEnabled = false;
         this._scorpionsPlaced = false;
         this.axeChopSound = null;
@@ -277,7 +282,12 @@ class Game {
                 this.ambientWind.bufferPromise,
                 preloadFireMedia(),
                 new FBXLoader().loadAsync('/models/butterfly.fbx').catch(() => {}),
-                new FBXLoader().loadAsync('/models/chicken.fbx').catch(() => {})
+                new FBXLoader().loadAsync('/models/chicken.fbx').catch(() => {}),
+                new FBXLoader()
+                    .loadAsync(
+                        '/models/Meshy_AI_A_female_deer_very_r_quadruped/Meshy_AI_A_female_deer_very_r_quadruped_model_Animation_Walking_withSkin.fbx'
+                    )
+                    .catch(() => {})
             ]);
 
             this.applyFeatureToggles();
@@ -409,6 +419,7 @@ class Game {
         const perfToggle = document.getElementById('toggle-performance');
         const lakeFishToggle = document.getElementById('toggle-lake-fish');
         const chickensToggle = document.getElementById('toggle-chickens');
+        const deerToggle = document.getElementById('toggle-deer');
         const butterfliesToggle = document.getElementById('toggle-butterflies');
         const scorpionsToggle = document.getElementById('toggle-scorpions');
         const airbusToggle = document.getElementById('toggle-airbus');
@@ -416,6 +427,7 @@ class Game {
         if (perfToggle) perfToggle.checked = this.performanceMode;
         if (lakeFishToggle) lakeFishToggle.checked = readStoredBool(OPT.lakeFish, false);
         if (chickensToggle) chickensToggle.checked = readStoredBool(OPT.chickens, false);
+        if (deerToggle) deerToggle.checked = readStoredBool(OPT.deer, true);
         if (butterfliesToggle) butterfliesToggle.checked = readStoredBool(OPT.butterflies, false);
         if (scorpionsToggle) scorpionsToggle.checked = readStoredBool(OPT.scorpions, false);
         if (airbusToggle) airbusToggle.checked = readStoredBool(OPT.airbus, false);
@@ -453,16 +465,19 @@ class Game {
             }
             const lakeFishOn = !!lakeFishToggle?.checked;
             const chickensOn = !!chickensToggle?.checked;
+            const deerOn = !!deerToggle?.checked;
             const butterfliesOn = !!butterfliesToggle?.checked;
             const scorpionsOn = !!scorpionsToggle?.checked;
             const airbusOn = !!airbusToggle?.checked;
             localStorage.setItem(OPT.lakeFish, lakeFishOn ? 'true' : 'false');
             localStorage.setItem(OPT.chickens, chickensOn ? 'true' : 'false');
+            localStorage.setItem(OPT.deer, deerOn ? 'true' : 'false');
             localStorage.setItem(OPT.butterflies, butterfliesOn ? 'true' : 'false');
             localStorage.setItem(OPT.scorpions, scorpionsOn ? 'true' : 'false');
             localStorage.setItem(OPT.airbus, airbusOn ? 'true' : 'false');
 
             this.chickensEnabled = chickensOn;
+            this.deerEnabled = deerOn;
             this.butterfliesEnabled = butterfliesOn;
 
             const prevLabel = startBtn.textContent;
@@ -735,6 +750,15 @@ class Game {
                 const cap = Math.min(4, this.chickenSpawner.maxChickens);
                 for (let i = 0; i < cap; i++) {
                     this.chickenSpawner.spawnChicken();
+                }
+            }
+        }
+        if (this.deerSpawner) {
+            this.deerSpawner.autoSpawn = !!this.deerEnabled;
+            this.deerSpawner.setAllVisible(!!this.deerEnabled);
+            if (this.deerEnabled && this.character?.isLoaded) {
+                if (this.deerSpawner.deer.length === 0) {
+                    this.deerSpawner.seedInitialHerd(5);
                 }
             }
         }
@@ -2113,6 +2137,12 @@ class Game {
 
         if (this.chickensEnabled && this.chickenSpawner) {
             this.chickenSpawner.update(delta, this.world, dogPos);
+        }
+        if (this.deerEnabled && this.deerSpawner) {
+            const playerForDeer = this.character.isLoaded
+                ? this.character.getPosition()
+                : updatePos;
+            this.deerSpawner.update(delta, this.world, dogPos, playerForDeer);
         }
         if (this.butterfliesEnabled && this.butterflySpawner) {
             this.butterflySpawner.update(delta, updatePos, this.world);
