@@ -256,4 +256,29 @@ export class FireManager {
     update(dt) {
         for (const f of this.fires) f.update(dt);
     }
+
+    /**
+     * @param {THREE.Vector3} worldPos
+     * @param {number} maxDist horizontal distance
+     * @returns {Fire | null}
+     */
+    findNearestLitFire(worldPos, maxDist = 4.5) {
+        if (!worldPos) return null;
+        const px = worldPos.x;
+        const pz = worldPos.z;
+        let best = null;
+        let bestD = maxDist;
+        for (let i = 0; i < this.fires.length; i++) {
+            const f = this.fires[i];
+            if (!f.ready) continue;
+            const dx = f.pos.x - px;
+            const dz = f.pos.z - pz;
+            const d = Math.hypot(dx, dz);
+            if (d < bestD) {
+                bestD = d;
+                best = f;
+            }
+        }
+        return best;
+    }
 }

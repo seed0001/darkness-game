@@ -1,8 +1,19 @@
 import * as THREE from 'three';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
-import { LAKE_CX, LAKE_CZ } from './world.js';
 
-/** @typedef {{ id: string, label: string, modelPath: string, filePrefix: string, useNormalMap?: boolean, modelScale?: number, animations: Record<string, string> }} CharacterProfile */
+/**
+ * @typedef {{
+ *   id: string,
+ *   label: string,
+ *   modelPath: string,
+ *   filePrefix: string,
+ *   useNormalMap?: boolean,
+ *   modelScale?: number,
+ *   animations: Record<string, string>,
+ *   animationUrls?: Record<string, string>
+ * }} CharacterProfile
+ * `animationUrls` — optional full URL from site root (e.g. `/models/.../file.fbx`) for clips that are not `modelPath + filePrefix + animations[name]`.
+ */
 
 /** @type {Record<string, CharacterProfile>} */
 export const CHARACTER_PROFILES = {
@@ -33,7 +44,11 @@ export const CHARACTER_PROFILES = {
             walk: 'Animation_Walking_withSkin.fbx',
             run: 'Animation_Running_withSkin.fbx',
             runSlow: 'Animation_Running_withSkin.fbx',
-            fall: 'Animation_Jump_with_Arms_Open_withSkin.fbx'
+            fall: 'Animation_Jump_with_Arms_Open_withSkin.fbx',
+            jump: 'Animation_Jump_with_Arms_Open_withSkin.fbx'
+        },
+        animationUrls: {
+            jump: '/models/frontline_soldier/Meshy_AI_Frontline_Soldier_biped_Animation_Regular_Jump_withSkin.fbx'
         }
     }
 };
@@ -57,6 +72,10 @@ export class Character {
 
         this.velocity = new THREE.Vector3();
         this.isLoaded = false;
+        this.isGrounded = true;
+        this.isJumpAnimating = false;
+        this.jumpTimer = 0;
+        this.jumpDuration = 0.72;
         /** @type {string | null} */
         this.profileId = null;
 
@@ -65,11 +84,8 @@ export class Character {
         this.backBone = null;
         this.heldRock = null;
         this.heldStick = null;
+        this.heldFood = null;
         this.heightWorld = 1.65;
-
-        /** Lying face-down at the lake (E to toggle when near water). */
-        this.lyingProne = false;
-        this.proneBellyClearance = 0.14;
 
         /** Resolved immediately; character mesh loads on demand via {@link loadCharacter}. */
         this.readyPromise = Promise.resolve();
@@ -176,18 +192,53 @@ export class Character {
         const fileToClip = new Map();
         for (const [name, file] of Object.entries(profile.animations)) {
             let clip;
-            if (!fileToClip.has(file)) {
-                const animFBX = await loader.loadAsync(profile.modelPath + profile.filePrefix + file);
-                if (animFBX.animations.length === 0) continue;
+            const defaultUrl = profile.modelPath + profile.filePrefix + file;
+            const overrideUrl = profile.animationUrls?.[name];
+            const cacheKey = overrideUrl ?? file;
+
+            if (!fileToClip.has(cacheKey)) {
+                let animFBX = null;
+                const tryLoad = async (url) => loader.loadAsync(url);
+
+                if (overrideUrl) {
+                    try {
+                        animFBX = await tryLoad(overrideUrl);
+                    } catch (e) {
+                        const alt =
+                            name === 'jump'
+                                ? [
+                                      '/Meshy_AI_Frontline_Soldier_biped/Meshy_AI_Frontline_Soldier_biped_Animation_Regular_Jump_withSkin.fbx',
+                                      '/models/frontline_soldier/Meshy_AI_Frontline_Soldier_biped_Animation_Jump_withSkin.fbx',
+                                      '/Meshy_AI_Frontline_Soldier_biped/Meshy_AI_Frontline_Soldier_biped_Animation_Jump_withSkin.fbx',
+                                      defaultUrl
+                                  ]
+                                : [defaultUrl];
+                        for (let i = 0; i < alt.length && !animFBX; i++) {
+                            try {
+                                animFBX = await tryLoad(alt[i]);
+                            } catch {
+                                /* try next */
+                            }
+                        }
+                        if (!animFBX) {
+                            console.warn('Animation override failed:', overrideUrl, e);
+                            animFBX = await tryLoad(defaultUrl);
+                        }
+                    }
+                } else {
+                    animFBX = await tryLoad(defaultUrl);
+                }
+
+                if (!animFBX || animFBX.animations.length === 0) continue;
                 clip = animFBX.animations[0];
-                fileToClip.set(file, clip);
+                fileToClip.set(cacheKey, clip);
             } else {
-                clip = fileToClip.get(file).clone();
+                clip = fileToClip.get(cacheKey).clone();
             }
             clip.name = name;
             this.animations[name] = this.mixer.clipAction(clip);
 
-            if (name === 'fall') {
+            if (name === 'fall' || name === 'jump') {
                 this.animations[name].setLoop(THREE.LoopOnce);
                 this.animations[name].clampWhenFinished = true;
             }
@@ -221,7 +272,7 @@ export class Character {
         if (this.model) {
             this.heldRock = null;
             this.heldStick = null;
-            this.lyingProne = false;
+            this.heldFood = null;
 
             this.model.removeFromParent();
             this.model.traverse((child) => {
@@ -244,27 +295,30 @@ export class Character {
         this.profileId = null;
     }
 
-    setLyingProne(down) {
-        if (!this.isLoaded || !this.model) return;
-        if (down === this.lyingProne) return;
-        if (down) {
-            const p = this.position;
-            this.targetRotation = Math.atan2(LAKE_CX - p.x, LAKE_CZ - p.z);
-            this.rotation = this.targetRotation;
-            this.setState('idle');
-            this.lyingProne = true;
-        } else {
-            this.lyingProne = false;
-            this.model.rotation.x = 0;
+    tryJump() {
+        if (!this.isLoaded) return false;
+        if (!this.isGrounded || this.isJumpAnimating) return false;
+        this.isJumpAnimating = true;
+        this.jumpTimer = this.jumpDuration;
+        this.isGrounded = false;
+        if (this.animations.jump) {
+            const action = this.animations.jump;
+            action.reset();
+            action.timeScale = 1.0;
+            action.play();
+            const clipDur = action.getClip()?.duration;
+            if (clipDur && Number.isFinite(clipDur)) {
+                this.jumpDuration = Math.max(0.35, Math.min(1.5, clipDur));
+                this.jumpTimer = this.jumpDuration;
+            }
+            this.setState('jump');
+        } else if (this.animations.fall) {
+            this.setState('fall');
         }
-    }
-
-    isLyingProne() {
-        return this.lyingProne;
+        return true;
     }
 
     setState(newState) {
-        if (this.lyingProne) return;
         if (!this.isLoaded || newState === this.currentState) return;
         if (!this.animations[newState]) return;
 
@@ -338,7 +392,7 @@ export class Character {
     }
 
     attachHeldRock(mesh) {
-        if (!this.isLoaded || !mesh || this.heldRock || this.heldStick) return false;
+        if (!this.isLoaded || !mesh || this.heldRock || this.heldStick || this.heldFood) return false;
         this.heldRock = mesh;
         mesh.removeFromParent();
         const rest = mesh.userData.restScale ?? mesh.scale.x;
@@ -369,7 +423,7 @@ export class Character {
     }
 
     attachHeldStick(mesh) {
-        if (!this.isLoaded || !mesh || this.heldStick || this.heldRock) return false;
+        if (!this.isLoaded || !mesh || this.heldStick || this.heldRock || this.heldFood) return false;
         if (!mesh.userData.pickupStick) return false;
         this.heldStick = mesh;
         mesh.removeFromParent();
@@ -448,22 +502,73 @@ export class Character {
         return mesh;
     }
 
+    getHeldFood() {
+        return this.heldFood;
+    }
+
+    stripHeldFood() {
+        if (!this.heldFood) return null;
+        const m = this.heldFood;
+        this.heldFood = null;
+        m.removeFromParent();
+        return m;
+    }
+
+    attachHeldFood(mesh) {
+        if (!this.isLoaded || !mesh || this.heldFood || this.heldRock || this.heldStick) return false;
+        if (!mesh.userData.pickupFood) return false;
+        this.heldFood = mesh;
+        mesh.removeFromParent();
+        const rest = mesh.userData.restScale ?? mesh.scale.x;
+        const inHand = rest * 0.48;
+        if (this.rightHand) {
+            this.rightHand.add(mesh);
+            mesh.position.set(0.05, 0.1, 0.05);
+            mesh.rotation.set(0.2, 0.35, -0.25);
+            mesh.scale.setScalar(inHand);
+        } else if (this.model) {
+            this.model.add(mesh);
+            mesh.position.set(0.35, 1.12, 0.12);
+            mesh.rotation.set(0.15, 0.4, -0.2);
+            mesh.scale.setScalar(inHand);
+        } else {
+            this.heldFood = null;
+            return false;
+        }
+        return true;
+    }
+
+    dropHeldFood(scene, world, camera) {
+        if (!this.isLoaded || !this.heldFood || !scene || !world) return null;
+        const mesh = this.heldFood;
+        this.heldFood = null;
+        mesh.removeFromParent();
+        const rest = mesh.userData.restScale ?? 1;
+        mesh.scale.setScalar(rest);
+
+        const forward = new THREE.Vector3(0, 0, -1);
+        if (camera) forward.applyQuaternion(camera.quaternion);
+        forward.y = 0;
+        if (forward.lengthSq() < 1e-6) forward.set(0, 0, -1);
+        else forward.normalize();
+
+        const p = this.position.clone().addScaledVector(forward, 1.0);
+        p.y = world.getHeightAt(p.x, p.z) + 0.1;
+        mesh.position.copy(p);
+        mesh.rotation.set(
+            (Math.random() - 0.5) * 0.5,
+            this.rotation + (Math.random() - 0.5) * 0.5,
+            (Math.random() - 0.5) * 0.4
+        );
+        scene.add(mesh);
+        return mesh;
+    }
+
     update(delta, terrainManager) {
         if (!this.isLoaded || !this.model) return;
 
         if (this.mixer) {
             this.mixer.update(delta);
-        }
-
-        if (this.lyingProne) {
-            if (terrainManager) {
-                const terrainHeight = terrainManager.getHeightAt(this.position.x, this.position.z);
-                this.position.y = terrainHeight + this.proneBellyClearance;
-            }
-            this.model.rotation.y = this.rotation;
-            this.model.rotation.x = Math.PI / 2 * 0.97;
-            this.model.position.copy(this.position);
-            return;
         }
 
         const rotationSpeed = 10;
@@ -475,6 +580,15 @@ export class Character {
         this.rotation += rotationDiff * Math.min(1, rotationSpeed * delta);
         this.model.rotation.y = this.rotation;
         this.model.rotation.x = 0;
+
+        if (this.isJumpAnimating) {
+            this.jumpTimer -= delta;
+            if (this.jumpTimer <= 0) {
+                this.isJumpAnimating = false;
+                this.isGrounded = true;
+                this.setState('idle');
+            }
+        }
 
         if (terrainManager) {
             const terrainHeight = terrainManager.getHeightAt(this.position.x, this.position.z);

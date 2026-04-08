@@ -2,16 +2,18 @@ import * as THREE from 'three';
 /** Same flow + dual normal maps as three.js `webgpu_water` / Water2Mesh; WebGL path (Reflector + Refractor). */
 import { Water as WaterFlow } from 'three/examples/jsm/objects/Water2.js';
 import {
-    createSharedGrassBladeGeometry,
-    createSharedGrassWindMaterial,
     buildGrassInstancedMesh,
     buildGrassInstancedMeshFromMatrices,
     createPickupRocksForChunk,
+    createMiningFragmentRocks,
     createPickupSticksForChunk,
+    createPickupBerriesForChunk,
     createBouldersForChunk,
     createStickWoodMaterial
 } from './grassRocks.js';
+import { createGrassParticleBladeGeometry, createGrassParticleMaterial } from './grassParticleField.js';
 import { computeGrassInstanceMatricesWithHeight } from './chunkGenShared.js';
+import { getGrassGenerationParams } from './grassSettings.js';
 import { createProceduralTree } from './ezTreeSpawn.js';
 
 function mulberry32(a) {
@@ -36,7 +38,7 @@ export const LAKE_RX = 23;
 export const LAKE_RZ = 17;
 const LAKE_MAX_DEPTH = 2.45;
 
-/** True when the player is close enough to the lake for shore interactions (lie down, etc.). */
+/** True when the player is close enough to the lake ellipsoid (e.g. shallow water checks). */
 export function isNearLakeWater(wx, wz, margin = 4) {
     const dx = (wx - LAKE_CX) / (LAKE_RX + margin);
     const dz = (wz - LAKE_CZ) / (LAKE_RZ + margin);
@@ -100,8 +102,9 @@ class Noise {
 }
 
 export class WorldManager {
-    constructor(scene) {
+    constructor(scene, renderer = null) {
         this.scene = scene;
+        this.renderer = renderer;
         this.chunkSize = 64;
         this.resolution = 4;
         this.chunks = new Map();
@@ -110,9 +113,10 @@ export class WorldManager {
         this.waterLevel = -10.0;
         this.pickupRocks = [];
         this.pickupSticks = [];
+        this.pickupFoods = [];
         this.choppableLogs = [];
-        this.grassGeometry = createSharedGrassBladeGeometry();
-        this.grassMaterial = createSharedGrassWindMaterial();
+        this.grassGeometry = createGrassParticleBladeGeometry();
+        this.grassMaterial = createGrassParticleMaterial();
 
         /** Procedural pines via @dgreenheck/ez-tree (see ezTreeSpawn.js). */
         this.pineReady = false;
@@ -168,29 +172,51 @@ export class WorldManager {
         if (!data) return;
         if (data.type === 'error') {
             console.warn('Chunk worker:', data.message);
-            this.fallbackGrassForChunk(data.key);
+            this.fallbackGrassForChunk(data.key, data.grassRequestId);
             return;
         }
         if (data.type !== 'grass') return;
         const chunk = this.chunks.get(data.key);
-        if (!chunk || chunk.grass) return;
+        if (!chunk) return;
+        if (
+            data.grassRequestId !== undefined &&
+            data.grassRequestId !== chunk.grassRequestId
+        ) {
+            return;
+        }
 
+        if (chunk.grass) {
+            this.scene.remove(chunk.grass);
+            chunk.grass = null;
+        }
+
+        const maxB = Math.max(data.bladeTarget ?? 0, data.count, 1);
         const grass = buildGrassInstancedMeshFromMatrices(
             this.grassGeometry,
             this.grassMaterial,
             data.matrices,
             data.count,
-            undefined,
+            maxB,
             data.instanceColors
         );
-        this.scene.add(grass);
-        chunk.grass = grass;
+        if (grass) {
+            this.scene.add(grass);
+            chunk.grass = grass;
+        } else {
+            chunk.grass = null;
+        }
         this.applyLakeGrassToChunkIfNeeded(chunk);
     }
 
-    fallbackGrassForChunk(key) {
+    fallbackGrassForChunk(key, grassRequestId) {
         const chunk = this.chunks.get(key);
         if (!chunk || chunk.grass) return;
+        if (
+            grassRequestId !== undefined &&
+            grassRequestId !== chunk.grassRequestId
+        ) {
+            return;
+        }
         const groundY = chunk.mesh.position.y;
         const grass = buildGrassInstancedMesh(
             this.grassGeometry,
@@ -200,8 +226,10 @@ export class WorldManager {
             chunk.cz,
             groundY
         );
-        this.scene.add(grass);
-        chunk.grass = grass;
+        if (grass) {
+            this.scene.add(grass);
+            chunk.grass = grass;
+        }
         this.applyLakeGrassToChunkIfNeeded(chunk);
     }
 
@@ -374,28 +402,6 @@ export class WorldManager {
         const chunkTrees = [];
         this.spawnTreesForChunk(cx, cz, groundY, chunkTrees);
 
-        let grass = null;
-        if (this.chunkWorker) {
-            this.chunkWorker.postMessage({
-                type: 'grass',
-                key,
-                cx,
-                cz,
-                chunkSize: this.chunkSize,
-                groundY
-            });
-        } else {
-            grass = buildGrassInstancedMesh(
-                this.grassGeometry,
-                this.grassMaterial,
-                this.chunkSize,
-                cx,
-                cz,
-                groundY
-            );
-            this.scene.add(grass);
-        }
-
         const pickupRocks = createPickupRocksForChunk(
             this.scene,
             this.chunkSize,
@@ -412,6 +418,14 @@ export class WorldManager {
             groundY,
             (m) => this.registerPickupStick(m)
         );
+        const pickupBerries = createPickupBerriesForChunk(
+            this.scene,
+            this.chunkSize,
+            cx,
+            cz,
+            groundY,
+            (m) => this.registerPickupFood(m)
+        );
         const boulders = createBouldersForChunk(this.scene, this.chunkSize, cx, cz, groundY);
 
         const chunkData = {
@@ -420,12 +434,46 @@ export class WorldManager {
             cx,
             cz,
             objects: chunkTrees,
-            grass,
+            grass: null,
+            grassRequestId: 1,
             pickupRocks,
             pickupSticks,
+            pickupBerries,
             boulders
         };
+        /** Register chunk before worker replies — otherwise grass messages can arrive first and be dropped. */
         this.chunks.set(key, chunkData);
+
+        const grassGen = getGrassGenerationParams();
+        if (this.chunkWorker) {
+            this.chunkWorker.postMessage({
+                type: 'grass',
+                key,
+                cx,
+                cz,
+                chunkSize: this.chunkSize,
+                groundY,
+                grassRequestId: chunkData.grassRequestId,
+                bladeTarget: grassGen.bladeTarget,
+                widthScale: grassGen.widthScale,
+                heightScale: grassGen.heightScale
+            });
+        } else {
+            const grass = buildGrassInstancedMesh(
+                this.grassGeometry,
+                this.grassMaterial,
+                this.chunkSize,
+                cx,
+                cz,
+                groundY,
+                grassGen
+            );
+            if (grass) {
+                this.scene.add(grass);
+                chunkData.grass = grass;
+            }
+            this.applyLakeGrassToChunkIfNeeded(chunkData);
+        }
 
         pickupRocks.forEach((m) => {
             m.position.y = this.getHeightAt(m.position.x, m.position.z) + 0.16;
@@ -433,15 +481,14 @@ export class WorldManager {
         pickupSticks.forEach((m) => {
             m.position.y = this.getHeightAt(m.position.x, m.position.z) + 0.09;
         });
+        pickupBerries.forEach((m) => {
+            m.position.y = this.getHeightAt(m.position.x, m.position.z) + 0.12;
+        });
         boulders.forEach((m) => {
             const gy = this.getHeightAt(m.position.x, m.position.z);
             const sc = m.scale.x;
             m.position.y = gy + sc * 0.52;
         });
-
-        if (grass) {
-            this.applyLakeGrassToChunkIfNeeded(chunkData);
-        }
 
         return key;
     }
@@ -454,22 +501,78 @@ export class WorldManager {
         if (Math.hypot(ccx - LAKE_CX, ccz - LAKE_CZ) > 54) return;
 
         this.scene.remove(chunk.grass);
+        const p = getGrassGenerationParams();
         const { count, matrices, instanceColors } = computeGrassInstanceMatricesWithHeight(
             this.chunkSize,
             cx,
             cz,
-            (wx, wz) => this.getHeightAt(wx, wz)
+            (wx, wz) => this.getHeightAt(wx, wz),
+            p.bladeTarget,
+            p.widthScale,
+            p.heightScale
         );
         const grass = buildGrassInstancedMeshFromMatrices(
             this.grassGeometry,
             this.grassMaterial,
             matrices,
             count,
-            undefined,
+            p.bladeTarget,
             instanceColors
         );
-        this.scene.add(grass);
-        chunk.grass = grass;
+        if (grass) {
+            this.scene.add(grass);
+            chunk.grass = grass;
+        } else {
+            chunk.grass = null;
+        }
+    }
+
+    /**
+     * Rebuild grass for every loaded chunk (after changing grass settings).
+     */
+    regenerateAllGrass() {
+        const grassGen = getGrassGenerationParams();
+        for (const chunk of this.chunks.values()) {
+            if (chunk.grass) {
+                this.scene.remove(chunk.grass);
+                chunk.grass = null;
+            }
+        }
+        for (const chunk of this.chunks.values()) {
+            const key = `${chunk.cx},${chunk.cz}`;
+            const groundY = chunk.mesh.position.y;
+            if (this.chunkWorker) {
+                chunk.grassRequestId = (chunk.grassRequestId ?? 0) + 1;
+                this.chunkWorker.postMessage({
+                    type: 'grass',
+                    key,
+                    cx: chunk.cx,
+                    cz: chunk.cz,
+                    chunkSize: this.chunkSize,
+                    groundY,
+                    grassRequestId: chunk.grassRequestId,
+                    bladeTarget: grassGen.bladeTarget,
+                    widthScale: grassGen.widthScale,
+                    heightScale: grassGen.heightScale
+                });
+            } else {
+                chunk.grassRequestId = (chunk.grassRequestId ?? 0) + 1;
+                const grass = buildGrassInstancedMesh(
+                    this.grassGeometry,
+                    this.grassMaterial,
+                    this.chunkSize,
+                    chunk.cx,
+                    chunk.cz,
+                    groundY,
+                    grassGen
+                );
+                if (grass) {
+                    this.scene.add(grass);
+                    chunk.grass = grass;
+                }
+                this.applyLakeGrassToChunkIfNeeded(chunk);
+            }
+        }
     }
 
     registerPickupRock(mesh) {
@@ -494,17 +597,32 @@ export class WorldManager {
         if (i >= 0) this.pickupSticks.splice(i, 1);
     }
 
+    registerPickupFood(mesh) {
+        if (!mesh || !mesh.userData.pickupFood) return;
+        if (this.pickupFoods.includes(mesh)) return;
+        this.pickupFoods.push(mesh);
+    }
+
+    unregisterPickupFood(mesh) {
+        const i = this.pickupFoods.indexOf(mesh);
+        if (i >= 0) this.pickupFoods.splice(i, 1);
+    }
+
+    /**
+     * @returns {null | 'tree' | 'boulder'} What was struck (for SFX: stone vs wood).
+     */
     tryMeleeAxeHit(playerPos, forwardXZ) {
-        if (!playerPos || !forwardXZ) return;
+        if (!playerPos || !forwardXZ) return null;
         const f = forwardXZ.clone();
         f.y = 0;
-        if (f.lengthSq() < 1e-8) return;
+        if (f.lengthSq() < 1e-8) return null;
         f.normalize();
 
-        const reach = 4.2;
-        const minDot = 0.36;
+        const reach = 6.25;
+        const minDot = 0.15;
         let best = null;
         let bestD = Infinity;
+        let bestKind = null;
 
         this.chunks.forEach((chunk) => {
             if (!chunk.objects) return;
@@ -512,30 +630,129 @@ export class WorldManager {
                 const tree = chunk.objects[o];
                 if (!tree.userData?.meshyTree) continue;
                 if (tree.userData.treePhase !== 'standing') continue;
-                tree.updateMatrixWorld(true);
-                const box = new THREE.Box3().setFromObject(tree);
-                const c = new THREE.Vector3();
-                box.getCenter(c);
-                const dx = c.x - playerPos.x;
-                const dz = c.z - playerPos.z;
-
+                const tx = tree.position.x;
+                const tz = tree.position.z;
+                const dx = tx - playerPos.x;
+                const dz = tz - playerPos.z;
                 const dist = Math.hypot(dx, dz);
-                if (dist > reach || dist < 0.08) continue;
+                if (dist > reach || dist < 0.06) continue;
                 const toTree = new THREE.Vector3(dx, 0, dz).normalize();
                 if (f.dot(toTree) < minDot) continue;
                 if (dist < bestD) {
                     bestD = dist;
                     best = tree;
+                    bestKind = 'tree';
                 }
             }
         });
-        if (best) {
+
+        this.chunks.forEach((chunk) => {
+            if (!chunk.boulders) return;
+            for (let i = 0; i < chunk.boulders.length; i++) {
+                const b = chunk.boulders[i];
+                if (!b.parent || !b.userData.isBoulder) continue;
+                if (b.userData.mineable === false) continue;
+                const dx = b.position.x - playerPos.x;
+                const dz = b.position.z - playerPos.z;
+                const dist = Math.hypot(dx, dz);
+                if (dist > reach || dist < 0.06) continue;
+                const toB = new THREE.Vector3(dx, 0, dz).normalize();
+                if (f.dot(toB) < minDot) continue;
+                if (dist < bestD) {
+                    bestD = dist;
+                    best = b;
+                    bestKind = 'boulder';
+                }
+            }
+        });
+
+        if (!best || !bestKind) return null;
+        if (bestKind === 'tree') {
             this.applyTreeChop(best);
+        } else {
+            this.applyBoulderMineHit(best);
         }
+        return bestKind;
     }
 
+    /** Standing tree in melee cone (wood chop SFX on swing — not boulders). */
+    isTreeOnlyNearForChop(playerPos, forwardXZ, reach = 6.25, minDot = 0.15) {
+        if (!playerPos || !forwardXZ) return false;
+        const f = forwardXZ.clone();
+        f.y = 0;
+        if (f.lengthSq() < 1e-8) return false;
+        f.normalize();
+
+        for (const chunk of this.chunks.values()) {
+            if (!chunk.objects) continue;
+            for (let o = 0; o < chunk.objects.length; o++) {
+                const tree = chunk.objects[o];
+                if (!tree.userData?.meshyTree) continue;
+                if (tree.userData.treePhase !== 'standing') continue;
+                const tx = tree.position.x;
+                const tz = tree.position.z;
+                const dx = tx - playerPos.x;
+                const dz = tz - playerPos.z;
+                const dist = Math.hypot(dx, dz);
+                if (dist > reach || dist < 0.06) continue;
+                const toTree = new THREE.Vector3(dx, 0, dz).normalize();
+                if (f.dot(toTree) < minDot) continue;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Tree or mineable boulder in front of the player (axe swing SFX). */
+    isTreeNearForChop(playerPos, forwardXZ, reach = 6.25, minDot = 0.15) {
+        if (!playerPos || !forwardXZ) return false;
+        const f = forwardXZ.clone();
+        f.y = 0;
+        if (f.lengthSq() < 1e-8) return false;
+        f.normalize();
+
+        for (const chunk of this.chunks.values()) {
+            if (!chunk.objects) continue;
+            for (let o = 0; o < chunk.objects.length; o++) {
+                const tree = chunk.objects[o];
+                if (!tree.userData?.meshyTree) continue;
+                if (tree.userData.treePhase !== 'standing') continue;
+                const tx = tree.position.x;
+                const tz = tree.position.z;
+                const dx = tx - playerPos.x;
+                const dz = tz - playerPos.z;
+                const dist = Math.hypot(dx, dz);
+                if (dist > reach || dist < 0.06) continue;
+                const toTree = new THREE.Vector3(dx, 0, dz).normalize();
+                if (f.dot(toTree) < minDot) continue;
+                return true;
+            }
+        }
+
+        for (const chunk of this.chunks.values()) {
+            if (!chunk.boulders) continue;
+            for (let i = 0; i < chunk.boulders.length; i++) {
+                const b = chunk.boulders[i];
+                if (!b.parent || !b.userData.isBoulder) continue;
+                if (b.userData.mineable === false) continue;
+                const dx = b.position.x - playerPos.x;
+                const dz = b.position.z - playerPos.z;
+                const dist = Math.hypot(dx, dz);
+                if (dist > reach || dist < 0.06) continue;
+                const toB = new THREE.Vector3(dx, 0, dz).normalize();
+                if (f.dot(toB) < minDot) continue;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * @returns {null | 'tree' | 'boulder'} First target type hit this frame (for SFX).
+     */
     tryAxeHitTree(axePos, hitSet) {
-        if (!axePos || !hitSet) return;
+        if (!axePos || !hitSet) return null;
+        let hitKind = null;
         this.chunks.forEach((chunk) => {
             if (!chunk.objects) return;
             for (let o = 0; o < chunk.objects.length; o++) {
@@ -546,20 +763,45 @@ export class WorldManager {
                 tree.updateMatrixWorld(true);
                 if (tree.userData.treePhase !== 'standing') continue;
                 const box = new THREE.Box3().setFromObject(tree);
-                const center = new THREE.Vector3();
-                const size = new THREE.Vector3();
-                box.getCenter(center);
-                box.getSize(size);
-
-                const horiz = Math.hypot(axePos.x - center.x, axePos.z - center.z);
-                const maxR = Math.max(size.x, size.z) * 0.42 + 0.75;
+                const tx = tree.position.x;
+                const tz = tree.position.z;
+                const horiz = Math.hypot(axePos.x - tx, axePos.z - tz);
+                const tr =
+                    typeof tree.userData.collisionRadius === 'number' && tree.userData.collisionRadius > 0
+                        ? tree.userData.collisionRadius
+                        : 2.2;
+                const maxR = tr + 1.5;
                 if (horiz > maxR) continue;
-                if (axePos.y < box.min.y - 2.0 || axePos.y > box.max.y + 3.0) continue;
+                if (axePos.y < box.min.y - 2.0 || axePos.y > box.max.y + 4.0) continue;
 
                 hitSet.add(tree.uuid);
                 this.applyTreeChop(tree);
+                if (!hitKind) hitKind = 'tree';
             }
         });
+
+        if (hitKind) return hitKind;
+
+        this.chunks.forEach((chunk) => {
+            if (!chunk.boulders) return;
+            for (let i = 0; i < chunk.boulders.length; i++) {
+                const boulder = chunk.boulders[i];
+                if (!boulder.parent || !boulder.userData.isBoulder) continue;
+                if (boulder.userData.mineable === false) continue;
+                if (hitSet.has(boulder.uuid)) continue;
+
+                const horiz = Math.hypot(axePos.x - boulder.position.x, axePos.z - boulder.position.z);
+                const br = boulder.userData.collisionRadius;
+                const maxR = (typeof br === 'number' && br > 0 ? br : 2) + 1.05;
+                if (horiz > maxR) continue;
+                if (axePos.y < boulder.position.y - 1.2 || axePos.y > boulder.position.y + 8.5) continue;
+
+                hitSet.add(boulder.uuid);
+                this.applyBoulderMineHit(boulder);
+                if (!hitKind) hitKind = 'boulder';
+            }
+        });
+        return hitKind;
     }
 
     applyTreeChop(tree) {
@@ -569,6 +811,56 @@ export class WorldManager {
         if (tree.userData.chopStandingHits >= 3) {
             this.replaceTreeWithChoppableLog(tree);
         }
+    }
+
+    applyBoulderMineHit(boulder) {
+        if (!boulder.userData?.isBoulder) return;
+        if (boulder.userData.mineable === false) return;
+        boulder.userData.mineHits = (boulder.userData.mineHits || 0) + 1;
+        if (boulder.userData.mineHits >= 5) {
+            this.fragmentBoulderIntoPickupStones(boulder);
+        }
+    }
+
+    _removeBoulderFromChunkArrays(boulder) {
+        this.chunks.forEach((chunk) => {
+            if (!chunk.boulders) return;
+            const i = chunk.boulders.indexOf(boulder);
+            if (i >= 0) chunk.boulders.splice(i, 1);
+        });
+    }
+
+    _spawnStoneFragmentsAt(ox, oz, n) {
+        const gy = this.getHeightAt(ox, oz);
+        const fragments = createMiningFragmentRocks(this.scene, ox, oz, gy, n, (m) => this.registerPickupRock(m));
+        const cx = Math.floor(ox / this.chunkSize);
+        const cz = Math.floor(oz / this.chunkSize);
+        const chunk = this.chunks.get(`${cx},${cz}`);
+        if (chunk && chunk.pickupRocks) {
+            for (let i = 0; i < fragments.length; i++) {
+                chunk.pickupRocks.push(fragments[i]);
+            }
+        }
+        fragments.forEach((m) => {
+            m.position.y = this.getHeightAt(m.position.x, m.position.z) + 0.16;
+        });
+        return fragments;
+    }
+
+    fragmentBoulderIntoPickupStones(boulder) {
+        if (!boulder.userData?.isBoulder) return;
+        const ox = boulder.position.x;
+        const oz = boulder.position.z;
+
+        this._removeBoulderFromChunkArrays(boulder);
+        this.scene.remove(boulder);
+        if (boulder.geometry) boulder.geometry.dispose();
+        if (boulder.material && typeof boulder.material.dispose === 'function') {
+            boulder.material.dispose();
+        }
+
+        const n = 4 + Math.floor(Math.random() * 2);
+        this._spawnStoneFragmentsAt(ox, oz, n);
     }
 
     replaceTreeWithChoppableLog(tree) {
@@ -597,6 +889,7 @@ export class WorldManager {
         log.receiveShadow = true;
         log.userData.interactiveLog = true;
         log.userData.highlightEmissive = new THREE.Color(0xe8b868);
+        log.userData.collisionRadius = 2.45 * 0.48 + 0.15;
         this.scene.add(log);
         this.choppableLogs.push(log);
     }
@@ -626,6 +919,7 @@ export class WorldManager {
             mesh.rotation.z = Math.PI / 2;
             mesh.rotation.y = Math.random() * Math.PI * 2;
             mesh.position.set(sx, sgy + 0.09, sz);
+            mesh.userData.collisionRadius = len * 0.48 + 0.1;
             mesh.castShadow = true;
             mesh.receiveShadow = true;
             mesh.userData.pickupStick = true;
@@ -645,10 +939,10 @@ export class WorldManager {
         });
     }
 
-    updateDecorationTime(elapsedSeconds) {
-        const shader = this.grassMaterial?.userData?.grassShader;
-        if (shader?.uniforms?.uGrassTime) {
-            shader.uniforms.uGrassTime.value = elapsedSeconds;
+    updateDecorationTime(elapsedSeconds, deltaSeconds = 0, lighting = null) {
+        const gu = this.grassMaterial?.userData?.grassUniforms;
+        if (gu?.uGrassTime) {
+            gu.uGrassTime.value = elapsedSeconds;
         }
     }
 
@@ -742,6 +1036,37 @@ export class WorldManager {
             }
         }
 
+        const foods = this.pickupFoods;
+        for (let i = 0; i < foods.length; i++) {
+            const mesh = foods[i];
+            if (!mesh.parent || !mesh.material) continue;
+            const dx = mesh.position.x - px;
+            const dz = mesh.position.z - pz;
+            const dist = Math.sqrt(dx * dx + dz * dz);
+            let k = 0;
+            if (dist <= inner) {
+                k = 1;
+            } else if (dist < outer) {
+                const t = (outer - dist) / (outer - inner);
+                k = t * t * (3 - 2 * t);
+            }
+            const pulse =
+                0.13 * Math.sin(elapsedSeconds * 6.0 + mesh.position.x * 0.18 + mesh.position.z * 0.15);
+            const m = mesh.material;
+            const tint = mesh.userData.highlightEmissive;
+            const boost = THREE.MathUtils.clamp(k * 0.88 + pulse * k, 0, 1.3);
+            if (boost < 0.008) {
+                m.emissive.setHex(0x000000);
+                m.emissiveIntensity = 0;
+            } else if (tint) {
+                m.emissive.copy(tint);
+                m.emissiveIntensity = boost;
+            } else {
+                m.emissive.setHex(0xaa2040);
+                m.emissiveIntensity = boost;
+            }
+        }
+
         const logs = this.choppableLogs;
         for (let i = 0; i < logs.length; i++) {
             const mesh = logs[i];
@@ -800,28 +1125,75 @@ export class WorldManager {
     }
 
     /**
-     * Push (x,z) out of boulder collision circles so the player cannot walk through large rocks.
+     * Push (x,z) out of circular obstacles (trees, boulders, rocks, sticks, logs).
      */
-    resolveBoulderCollision(x, z, playerRadius = 0.42) {
+    resolveObstacleCollision(x, z, playerRadius = 0.42) {
         let px = x;
         let pz = z;
-        const boulders = [];
+        const obstacles = [];
+        const pushObstacle = (o) => {
+            if (!o || !o.parent) return;
+            let r = o.userData.collisionRadius;
+            if (typeof r !== 'number' || r <= 0) {
+                if (o.userData?.isBoulder) {
+                    r = 1.45 * o.scale.x + 0.25;
+                } else if (o.userData?.meshyTree) {
+                    r = 2.5;
+                } else if (o.userData?.pickupRock) {
+                    r = 0.38 * (o.userData.restScale ?? o.scale.x);
+                } else if (o.userData?.pickupStick) {
+                    r = 0.55;
+                } else if (o.userData?.pickupFood) {
+                    r =
+                        typeof o.userData.collisionRadius === 'number'
+                            ? o.userData.collisionRadius
+                            : 0.15;
+                } else if (o.userData?.interactiveLog) {
+                    r = 1.35;
+                } else {
+                    return;
+                }
+            }
+            const qdx = x - o.position.x;
+            const qdz = z - o.position.z;
+            const loose = r + playerRadius + 52;
+            if (qdx * qdx + qdz * qdz > loose * loose) return;
+            obstacles.push({ o, r });
+        };
+
         this.chunks.forEach((chunk) => {
-            if (!chunk.boulders) return;
-            for (let i = 0; i < chunk.boulders.length; i++) {
-                const b = chunk.boulders[i];
-                if (b.parent) boulders.push(b);
+            if (chunk.boulders) {
+                for (let i = 0; i < chunk.boulders.length; i++) {
+                    pushObstacle(chunk.boulders[i]);
+                }
+            }
+            if (chunk.objects) {
+                for (let i = 0; i < chunk.objects.length; i++) {
+                    const t = chunk.objects[i];
+                    if (t.userData?.meshyTree) pushObstacle(t);
+                }
             }
         });
-        for (let iter = 0; iter < 4; iter++) {
-            for (let i = 0; i < boulders.length; i++) {
-                const b = boulders[i];
-                let r = b.userData.collisionRadius;
-                if (typeof r !== 'number' || r <= 0) {
-                    r = 1.45 * b.scale.x + 0.25;
-                }
-                const dx = px - b.position.x;
-                const dz = pz - b.position.z;
+        for (let i = 0; i < this.pickupRocks.length; i++) {
+            pushObstacle(this.pickupRocks[i]);
+        }
+        for (let i = 0; i < this.pickupSticks.length; i++) {
+            pushObstacle(this.pickupSticks[i]);
+        }
+        for (let i = 0; i < this.pickupFoods.length; i++) {
+            pushObstacle(this.pickupFoods[i]);
+        }
+        for (let i = 0; i < this.choppableLogs.length; i++) {
+            pushObstacle(this.choppableLogs[i]);
+        }
+
+        obstacles.sort((a, b) => b.r - a.r);
+
+        for (let iter = 0; iter < 5; iter++) {
+            for (let i = 0; i < obstacles.length; i++) {
+                const { o, r } = obstacles[i];
+                const dx = px - o.position.x;
+                const dz = pz - o.position.z;
                 const distSq = dx * dx + dz * dz;
                 const minD = playerRadius + r;
                 const minSq = minD * minD;
@@ -833,6 +1205,11 @@ export class WorldManager {
             }
         }
         return { x: px, z: pz };
+    }
+
+    /** @deprecated Use {@link resolveObstacleCollision} — kept for callers. */
+    resolveBoulderCollision(x, z, playerRadius = 0.42) {
+        return this.resolveObstacleCollision(x, z, playerRadius);
     }
 
     getHeightAt(x, z) {
@@ -911,9 +1288,20 @@ export class WorldManager {
                     }
                 });
             }
+            if (c.pickupBerries) {
+                c.pickupBerries.forEach((b) => {
+                    this.unregisterPickupFood(b);
+                    this.scene.remove(b);
+                    b.geometry?.dispose();
+                    if (b.material && typeof b.material.dispose === 'function') {
+                        b.material.dispose();
+                    }
+                });
+            }
         });
         this.pickupRocks.length = 0;
         this.pickupSticks.length = 0;
+        this.pickupFoods.length = 0;
         this.chunks.clear();
 
         const data = JSON.parse(json);

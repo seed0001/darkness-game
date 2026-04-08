@@ -80,10 +80,48 @@
                 </div>
             </div>
             <button id="start-btn">CLICK TO START</button>
-            <p class="controls-hint">WASD · Mouse · Shift sprint · E pick up/drop · I inventory (24 slots) · E at lake shore: lie down / stand · fire ring + sticks · axe · Q throw · L flashlight · 1 day/night</p>
+            <p class="controls-hint">WASD · Mouse · Shift sprint · E pick up/drop · I inventory · O settings · right-click cooked food to eat · F tap: cook near fire · F hold 1s: ignite · C build · axe · Q throw · L flashlight · 1 day/night</p>
         </div>
+        <div id="survival-hud" class="vitals-hud" style="display: none;" aria-hidden="true">
+            <div class="vitals-hud__header">
+                <span class="vitals-hud__title">Status</span>
+                <span class="vitals-hud__subtitle">survival</span>
+            </div>
+            <div class="vitals-hud__rows">
+                <div class="vitals-hud__row vitals-hud__row--health" data-vital="health">
+                    <span class="vitals-hud__glyph" aria-hidden="true">◆</span>
+                    <span class="vitals-hud__label">Health</span>
+                    <div class="vitals-hud__track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-label="Health">
+                        <div id="health-bar-fill" class="vitals-hud__fill vitals-hud__fill--health"></div>
+                    </div>
+                </div>
+                <div class="vitals-hud__row vitals-hud__row--hunger" data-vital="hunger">
+                    <span class="vitals-hud__glyph" aria-hidden="true">◎</span>
+                    <span class="vitals-hud__label">Hunger</span>
+                    <div class="vitals-hud__track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-label="Hunger">
+                        <div id="hunger-bar-fill" class="vitals-hud__fill vitals-hud__fill--hunger"></div>
+                    </div>
+                </div>
+                <div class="vitals-hud__row vitals-hud__row--water" data-vital="water">
+                    <span class="vitals-hud__glyph" aria-hidden="true">◇</span>
+                    <span class="vitals-hud__label">Water</span>
+                    <div class="vitals-hud__track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-label="Hydration">
+                        <div id="water-bar-fill" class="vitals-hud__fill vitals-hud__fill--water"></div>
+                    </div>
+                </div>
+                <div class="vitals-hud__row vitals-hud__row--mentality" data-vital="mentality">
+                    <span class="vitals-hud__glyph" aria-hidden="true">✦</span>
+                    <span class="vitals-hud__label">Mind</span>
+                    <div class="vitals-hud__track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-label="Mentality">
+                        <div id="mentality-bar-fill" class="vitals-hud__fill vitals-hud__fill--mentality"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <div id="hud" style="display: none;">
             <div class="toolbar">
+                <button id="settings-btn" type="button">SETTINGS</button>
                 <button id="save-btn">SAVE WORLD</button>
                 <button id="import-btn">IMPORT WORLD</button>
                 <input type="file" id="import-input" accept=".json" style="display: none;">
@@ -112,7 +150,57 @@
                 <span id="inventory-count">0 / 24</span>
             </div>
             <div id="inventory-grid" class="inventory-grid"></div>
-            <p class="inventory-panel__hint">I close · click item slot to take · click empty slot to store held item</p>
+            <p class="inventory-panel__hint">I close · click slot to take item · empty slot to store · right-click cooked food to eat (restores health &amp; hunger)</p>
+        </div>
+
+        <div id="craft-panel" class="inventory-panel craft-panel" aria-hidden="true">
+            <div class="inventory-panel__header">
+                <h3>Build</h3>
+                <span id="craft-fire-count">Need 10 rocks + 5 sticks</span>
+            </div>
+            <div class="inventory-grid craft-grid">
+                <button id="craft-fire-slot" type="button" class="inventory-slot inventory-slot--filled craft-fire-slot">
+                    FIRE
+                </button>
+            </div>
+            <p class="inventory-panel__hint">C close · click fire to arm placement · left click ground place · hold F 1s to ignite</p>
+        </div>
+
+        <div id="cook-panel" class="inventory-panel cook-panel" aria-hidden="true">
+            <div class="inventory-panel__header">
+                <h3>Cook (fire)</h3>
+                <span id="cook-hint">12 slots · stand near a lit fire</span>
+            </div>
+            <div id="cook-grid" class="inventory-grid cook-grid"></div>
+            <p class="inventory-panel__hint">F tap near fire to toggle · click slot with food in hand · uncooked items cook over time</p>
+        </div>
+
+        <div id="settings-panel" class="inventory-panel settings-panel" aria-hidden="true">
+            <div class="inventory-panel__header settings-panel__header">
+                <h3>Settings</h3>
+                <button type="button" id="settings-close" class="settings-panel__close" aria-label="Close settings">×</button>
+            </div>
+            <div class="settings-tabs" role="tablist">
+                <span class="settings-tab settings-tab--active" role="tab" aria-selected="true">Grass</span>
+            </div>
+            <div class="settings-tab-panel" role="tabpanel">
+                <p class="settings-panel__intro">Tune instanced grass. Press <strong>Apply</strong> to rebuild grass on terrain that is already loaded.</p>
+                <label class="settings-slider-label" for="grass-density">
+                    Density <span id="grass-density-val" class="settings-slider-val">100</span>%
+                </label>
+                <input type="range" id="grass-density" min="0" max="100" value="100" step="1" class="settings-range">
+                <p id="grass-blades-estimate" class="settings-hint">~12000 blades per chunk at this density</p>
+                <label class="settings-slider-label" for="grass-width">
+                    Blade width <span id="grass-width-val" class="settings-slider-val">100</span>%
+                </label>
+                <input type="range" id="grass-width" min="25" max="200" value="100" step="5" class="settings-range">
+                <label class="settings-slider-label" for="grass-height">
+                    Blade height <span id="grass-height-val" class="settings-slider-val">100</span>%
+                </label>
+                <input type="range" id="grass-height" min="25" max="200" value="100" step="5" class="settings-range">
+                <button type="button" id="grass-apply" class="settings-apply-btn">Apply grass</button>
+                <p class="inventory-panel__hint">Values are saved in the browser. New chunks always use the latest settings.</p>
+            </div>
         </div>
     </div>
 

@@ -69,7 +69,7 @@ export async function loadScorpions(scene, world) {
         for (let i = 0; i < SCORPION_COUNT; i++) {
             const mesh = i === 0 ? proto : cloneSkeleton(proto);
             const { x, z, y } = pickLandPosition(world);
-            mesh.position.set(x, y, z);
+            mesh.position.set(x, y + 0.04, z);
             mesh.rotation.y = Math.random() * Math.PI * 2;
             scene.add(mesh);
         }

@@ -7,3 +7,6 @@ dist-ssr
 # Meshy export working dirs — served copies live under public/models/
 Meshy_AI_Frontline_Soldier_biped/
 chance_fbx/
+
+# Too large for GitHub (>100MB); keep locally or use Git LFS if needed
+public/Meshy_AI_small_bundle_of_stick_0407134049_texture_fbx/*.fbx

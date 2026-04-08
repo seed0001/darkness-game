@@ -25,7 +25,7 @@ export class BackpackManager {
         /** @type {'worn' | 'ground'} */
         this.state = 'worn';
         this.enabled = true;
-        /** @type {(null | { type: 'rock' | 'stick', mesh: THREE.Mesh })[]} */
+        /** @type {(null | { type: 'rock' | 'stick', meshes: THREE.Mesh[] } | { type: 'food', foodKind: string, cooked: boolean, meshes: THREE.Mesh[] })[]} */
         this.slots = new Array(24).fill(null);
 
         this.loaded = false;
@@ -137,10 +137,49 @@ export class BackpackManager {
         return this.slots;
     }
 
+    maxStack(type) {
+        return type === 'stick' ? 100 : 50;
+    }
+
+    maxStackFood(foodKind) {
+        if (foodKind === 'berry') return 50;
+        return 10;
+    }
+
+    slotMatchesFood(slot, foodKind, cooked) {
+        return (
+            slot &&
+            slot.type === 'food' &&
+            slot.foodKind === foodKind &&
+            slot.cooked === cooked
+        );
+    }
+
+    findSlotWithSpace(type) {
+        const cap = this.maxStack(type);
+        for (let i = 0; i < this.slots.length; i++) {
+            const s = this.slots[i];
+            if (s && s.type === type && s.meshes.length < cap) return i;
+        }
+        return -1;
+    }
+
+    findSlotWithSpaceFood(foodKind, cooked) {
+        const cap = this.maxStackFood(foodKind);
+        for (let i = 0; i < this.slots.length; i++) {
+            const s = this.slots[i];
+            if (this.slotMatchesFood(s, foodKind, cooked) && s.meshes.length < cap) return i;
+        }
+        return -1;
+    }
+
     storeHeldItem(character, preferredSlot = -1) {
         if (!this.loaded || !this.enabled || !character) return false;
         let mesh = null;
         let type = null;
+        /** @type {string | null} */
+        let foodKind = null;
+        let foodCooked = false;
         if (character.getHeldRock()) {
             mesh = character.stripHeldRock();
             type = 'rock';
@@ -149,16 +188,43 @@ export class BackpackManager {
             mesh = character.stripHeldStick();
             type = 'stick';
             if (mesh) this.world.unregisterPickupStick(mesh);
+        } else if (character.getHeldFood()) {
+            mesh = character.stripHeldFood();
+            type = 'food';
+            foodKind = mesh.userData.foodKind;
+            foodCooked = !!mesh.userData.cooked;
+            if (mesh) this.world.unregisterPickupFood(mesh);
         }
         if (!mesh || !type) return false;
 
         let idx = preferredSlot;
-        if (idx < 0 || idx >= this.slots.length || this.slots[idx] !== null) {
+        if (type === 'food') {
+            const cap = this.maxStackFood(foodKind);
+            const prefEmpty = idx >= 0 && idx < this.slots.length && this.slots[idx] === null;
+            if (
+                !prefEmpty &&
+                (idx < 0 ||
+                    idx >= this.slots.length ||
+                    !this.slotMatchesFood(this.slots[idx], foodKind, foodCooked) ||
+                    (this.slots[idx] && this.slots[idx].meshes.length >= cap))
+            ) {
+                idx = this.findSlotWithSpaceFood(foodKind, foodCooked);
+            }
+        } else if (
+            idx < 0 ||
+            idx >= this.slots.length ||
+            (this.slots[idx] && this.slots[idx].type !== type) ||
+            (this.slots[idx] && this.slots[idx].meshes.length >= this.maxStack(type))
+        ) {
+            idx = this.findSlotWithSpace(type);
+        }
+        if (idx < 0) {
             idx = this.findFirstEmptySlot();
         }
         if (idx < 0) {
             if (type === 'rock') character.attachHeldRock(mesh);
-            else character.attachHeldStick(mesh);
+            else if (type === 'stick') character.attachHeldStick(mesh);
+            else character.attachHeldFood(mesh);
             return false;
         }
 
@@ -167,51 +233,138 @@ export class BackpackManager {
         mesh.position.set(0, 0, 0);
         mesh.rotation.set(0, 0, 0);
         this.inventoryRoot.add(mesh);
-        this.slots[idx] = { type, mesh };
+        if (!this.slots[idx]) {
+            if (type === 'food') {
+                this.slots[idx] = { type: 'food', foodKind, cooked: foodCooked, meshes: [mesh] };
+            } else {
+                this.slots[idx] = { type, meshes: [mesh] };
+            }
+        } else {
+            this.slots[idx].meshes.push(mesh);
+        }
         return true;
     }
 
     storeWorldItem(type, mesh, preferredSlot = -1) {
         if (!this.loaded || !this.enabled || !mesh) return false;
-        if (type !== 'rock' && type !== 'stick') return false;
+        if (type === 'food' && !mesh.userData.pickupFood) return false;
+        if (type !== 'rock' && type !== 'stick' && type !== 'food') return false;
+
+        const foodKind = type === 'food' ? mesh.userData.foodKind : null;
+        const foodCooked = type === 'food' ? !!mesh.userData.cooked : false;
+
         let idx = preferredSlot;
-        if (idx < 0 || idx >= this.slots.length || this.slots[idx] !== null) {
+        if (type === 'food') {
+            const cap = this.maxStackFood(foodKind);
+            const prefEmpty = idx >= 0 && idx < this.slots.length && this.slots[idx] === null;
+            if (
+                !prefEmpty &&
+                (idx < 0 ||
+                    idx >= this.slots.length ||
+                    !this.slotMatchesFood(this.slots[idx], foodKind, foodCooked) ||
+                    (this.slots[idx] && this.slots[idx].meshes.length >= cap))
+            ) {
+                idx = this.findSlotWithSpaceFood(foodKind, foodCooked);
+            }
+        } else if (
+            idx < 0 ||
+            idx >= this.slots.length ||
+            (this.slots[idx] && this.slots[idx].type !== type) ||
+            (this.slots[idx] && this.slots[idx].meshes.length >= this.maxStack(type))
+        ) {
+            idx = this.findSlotWithSpace(type);
+        }
+        if (idx < 0) {
             idx = this.findFirstEmptySlot();
         }
         if (idx < 0) return false;
 
         if (type === 'rock') this.world.unregisterPickupRock(mesh);
-        else this.world.unregisterPickupStick(mesh);
+        else if (type === 'stick') this.world.unregisterPickupStick(mesh);
+        else this.world.unregisterPickupFood(mesh);
         mesh.removeFromParent();
         const rest = mesh.userData.restScale ?? mesh.scale.x;
         mesh.scale.setScalar(rest * 0.04);
         mesh.position.set(0, 0, 0);
         mesh.rotation.set(0, 0, 0);
         this.inventoryRoot.add(mesh);
-        this.slots[idx] = { type, mesh };
+        if (!this.slots[idx]) {
+            if (type === 'food') {
+                this.slots[idx] = { type: 'food', foodKind, cooked: foodCooked, meshes: [mesh] };
+            } else {
+                this.slots[idx] = { type, meshes: [mesh] };
+            }
+        } else {
+            this.slots[idx].meshes.push(mesh);
+        }
         return true;
     }
 
     withdrawFromSlot(character, slotIndex) {
         if (!this.loaded || !this.enabled || !character) return false;
         if (slotIndex < 0 || slotIndex >= this.slots.length) return false;
-        if (character.getHeldRock() || character.getHeldStick()) return false;
+        if (character.getHeldRock() || character.getHeldStick() || character.getHeldFood()) return false;
         const entry = this.slots[slotIndex];
-        if (!entry) return false;
+        if (!entry || entry.meshes.length === 0) return false;
 
-        this.slots[slotIndex] = null;
-        entry.mesh.removeFromParent();
-        const rest = entry.mesh.userData.restScale ?? 1;
-        entry.mesh.scale.setScalar(rest);
+        const mesh = entry.meshes.pop();
+        const entryType = entry.type;
+        if (entry.meshes.length === 0) this.slots[slotIndex] = null;
+        mesh.removeFromParent();
+        const rest = mesh.userData.restScale ?? 1;
+        mesh.scale.setScalar(rest);
 
-        if (entry.type === 'rock') {
-            character.attachHeldRock(entry.mesh);
-            this.world.registerPickupRock(entry.mesh);
+        if (entryType === 'rock') {
+            character.attachHeldRock(mesh);
+            this.world.registerPickupRock(mesh);
+        } else if (entryType === 'stick') {
+            character.attachHeldStick(mesh);
+            this.world.registerPickupStick(mesh);
         } else {
-            character.attachHeldStick(entry.mesh);
-            this.world.registerPickupStick(entry.mesh);
+            character.attachHeldFood(mesh);
+            this.world.registerPickupFood(mesh);
         }
         return true;
+    }
+
+    /**
+     * Remove one food mesh from a slot (e.g. eating). Does not register world pickup.
+     * @returns {THREE.Mesh | null}
+     */
+    popFoodMeshFromSlot(slotIndex) {
+        if (!this.loaded || slotIndex < 0 || slotIndex >= this.slots.length) return null;
+        const entry = this.slots[slotIndex];
+        if (!entry || entry.type !== 'food' || entry.meshes.length === 0) return null;
+        const mesh = entry.meshes.pop();
+        mesh.removeFromParent();
+        if (entry.meshes.length === 0) this.slots[slotIndex] = null;
+        return mesh;
+    }
+
+    getTotalByType(type) {
+        let total = 0;
+        for (let i = 0; i < this.slots.length; i++) {
+            const s = this.slots[i];
+            if (s && s.type === type) total += s.meshes.length;
+        }
+        return total;
+    }
+
+    consume(type, count) {
+        if (count <= 0) return true;
+        if (this.getTotalByType(type) < count) return false;
+        let left = count;
+        for (let i = 0; i < this.slots.length && left > 0; i++) {
+            const s = this.slots[i];
+            if (!s || s.type !== type) continue;
+            while (s.meshes.length > 0 && left > 0) {
+                const mesh = s.meshes.pop();
+                mesh.removeFromParent();
+                left--;
+            }
+            if (s.meshes.length === 0) this.slots[i] = null;
+        }
+        return left === 0;
     }
 
     distanceToPlayer(character) {
@@ -221,7 +374,7 @@ export class BackpackManager {
     totalStoredCount() {
         let total = 0;
         for (let i = 0; i < this.slots.length; i++) {
-            if (this.slots[i]) total++;
+            if (this.slots[i]) total += this.slots[i].meshes.length;
         }
         return total;
     }

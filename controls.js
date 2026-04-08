@@ -55,6 +55,11 @@ export class Controls {
                 case 'ShiftRight':
                     this.isSprinting = true;
                     break;
+                case 'Space':
+                    if (this.character && this.character.isLoaded) {
+                        this.character.tryJump();
+                    }
+                    break;
             }
         };
 
@@ -108,7 +113,7 @@ export class Controls {
     update(delta, terrainManager) {
         if (!this.isLocked || !this.character || !this.character.isLoaded) return;
 
-        if (this.character.isLyingProne()) {
+        if (this.character.isJumpAnimating) {
             this.character.update(delta, terrainManager);
             this.updateCamera();
             return;
@@ -143,7 +148,11 @@ export class Controls {
             const charPos = this.character.getPosition();
             let nx = charPos.x + moveX;
             let nz = charPos.z + moveZ;
-            if (terrainManager && typeof terrainManager.resolveBoulderCollision === 'function') {
+            if (terrainManager && typeof terrainManager.resolveObstacleCollision === 'function') {
+                const res = terrainManager.resolveObstacleCollision(nx, nz);
+                nx = res.x;
+                nz = res.z;
+            } else if (terrainManager && typeof terrainManager.resolveBoulderCollision === 'function') {
                 const res = terrainManager.resolveBoulderCollision(nx, nz);
                 nx = res.x;
                 nz = res.z;
@@ -151,9 +160,17 @@ export class Controls {
             this.character.setPosition(nx, charPos.y, nz);
             
             this.character.setRotation(moveAngle);
-            this.character.setState(animState);
+            if (this.character.isGrounded) {
+                this.character.setState(animState);
+            } else if (this.character.animations?.jump) {
+                this.character.setState('jump');
+            }
         } else {
-            this.character.setState('idle');
+            if (this.character.isGrounded) {
+                this.character.setState('idle');
+            } else if (this.character.animations?.jump) {
+                this.character.setState('jump');
+            }
         }
         
         this.character.update(delta, terrainManager);

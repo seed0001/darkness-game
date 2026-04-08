@@ -22,7 +22,9 @@ export class Chicken {
         this.isCaught = false;
         this.isDropped = false;
         this.despawnTimer = 0;
-        
+        /** Set when killed with axe; spawner removes on next update tick. */
+        this._removed = false;
+
         this.load();
     }
 
@@ -71,6 +73,28 @@ export class Chicken {
         this.despawnTimer = 10;
     }
 
+    /**
+     * Axe kill: strip model and mark for removal. Returns world position for meat drop, or null.
+     * @returns {THREE.Vector3 | null}
+     */
+    kill() {
+        if (this._removed || !this.isLoaded || !this.model) return null;
+        this._removed = true;
+        const pos = this.position.clone();
+        this.model.traverse((o) => {
+            if (o.geometry) o.geometry.dispose();
+            const m = o.material;
+            if (m) {
+                if (Array.isArray(m)) m.forEach((x) => x.dispose());
+                else m.dispose();
+            }
+        });
+        this.scene.remove(this.model);
+        this.model = null;
+        this.mixer = null;
+        return pos;
+    }
+
     checkDogProximity(dogPosition) {
         if (!dogPosition || this.isCaught || this.isDropped) return;
 
@@ -91,6 +115,7 @@ export class Chicken {
     }
 
     update(delta, terrainManager, dogPosition) {
+        if (this._removed) return true;
         if (!this.isLoaded || !this.model) return false;
 
         if (this.mixer) {
@@ -181,7 +206,8 @@ export class ChickenSpawner {
         this.spawnInterval = 5;
         this.spawnRadius = 60;
         this.minSpawnDist = 30;
-        this.autoSpawn = false;
+        /** When true, spawns chickens over time up to maxChickens (enabled from game options). */
+        this.autoSpawn = true;
     }
 
     getChickens() {
@@ -191,7 +217,9 @@ export class ChickenSpawner {
     update(delta, terrainManager, dogPosition) {
         this.spawnTimer += delta;
         
-        const activeChickens = this.chickens.filter(c => !c.isDropped || c.despawnTimer > 0);
+        const activeChickens = this.chickens.filter(
+            (c) => !c._removed && (!c.isDropped || c.despawnTimer > 0)
+        );
         
         if (
             this.autoSpawn &&

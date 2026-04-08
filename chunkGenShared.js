@@ -52,7 +52,18 @@ const _quat = new Quaternion();
 const _euler = new Euler();
 const _mat = new Matrix4();
 
-export function computeGrassInstanceMatrices(chunkSize, cx, cz, groundY, bladeTarget = BLADE_TARGET) {
+export function computeGrassInstanceMatrices(
+    chunkSize,
+    cx,
+    cz,
+    groundY,
+    bladeTarget = BLADE_TARGET,
+    widthScale = 1,
+    heightScale = 1
+) {
+    if (bladeTarget <= 0) {
+        return { count: 0, matrices: new Float32Array(0), instanceColors: new Float32Array(0) };
+    }
     const rng = mulberry32(hashChunk(cx, cz));
     const originX = cx * chunkSize;
     const originZ = cz * chunkSize;
@@ -88,8 +99,8 @@ export function computeGrassInstanceMatrices(chunkSize, cx, cz, groundY, bladeTa
         } else {
             s = 0.98 + rng() * 0.52;
         }
-        const sy = s * (0.92 + rng() * 0.32);
-        _scale.set(s, sy, s);
+        const sy = s * (0.92 + rng() * 0.32) * heightScale;
+        _scale.set(s * widthScale, sy, s * widthScale);
         _mat.compose(_pos, _quat, _scale);
         _mat.toArray(matrices, placed * 16);
         placed++;
@@ -101,7 +112,18 @@ export function computeGrassInstanceMatrices(chunkSize, cx, cz, groundY, bladeTa
 /**
  * Same as computeGrassInstanceMatrices but uses getHeightAt(wx, wz) per blade (terrain / lake).
  */
-export function computeGrassInstanceMatricesWithHeight(chunkSize, cx, cz, getHeightAt, bladeTarget = BLADE_TARGET) {
+export function computeGrassInstanceMatricesWithHeight(
+    chunkSize,
+    cx,
+    cz,
+    getHeightAt,
+    bladeTarget = BLADE_TARGET,
+    widthScale = 1,
+    heightScale = 1
+) {
+    if (bladeTarget <= 0) {
+        return { count: 0, matrices: new Float32Array(0), instanceColors: new Float32Array(0) };
+    }
     const rng = mulberry32(hashChunk(cx, cz));
     const originX = cx * chunkSize;
     const originZ = cz * chunkSize;
@@ -140,8 +162,8 @@ export function computeGrassInstanceMatricesWithHeight(chunkSize, cx, cz, getHei
         } else {
             s = 0.98 + rng() * 0.52;
         }
-        const sy = s * (0.92 + rng() * 0.32);
-        _scale.set(s, sy, s);
+        const sy = s * (0.92 + rng() * 0.32) * heightScale;
+        _scale.set(s * widthScale, sy, s * widthScale);
         _mat.compose(_pos, _quat, _scale);
         _mat.toArray(matrices, placed * 16);
         placed++;

@@ -25,6 +25,14 @@ export function createProceduralTree(trng, targetTreeHeightWorld) {
 
     tree.rotation.y = trng() * Math.PI * 2;
 
+    tree.updateMatrixWorld(true);
+    const boxFoot = new THREE.Box3().setFromObject(tree);
+    const footSize = new THREE.Vector3();
+    boxFoot.getSize(footSize);
+    /** Trunk-sized only — full canopy radius kept players farther than melee reach. */
+    const halfFoot = Math.max(footSize.x, footSize.z) * 0.5;
+    tree.userData.collisionRadius = Math.min(2.55, Math.max(1.02, halfFoot * 0.26));
+
     tree.userData.meshyTree = true;
     tree.userData.ezTree = true;
     tree.userData.treePhase = 'standing';

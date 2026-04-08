@@ -74,12 +74,14 @@ export async function loadLakeFish(scene) {
         for (let i = 0; i < FISH_COUNT; i++) {
             const mesh = i === 0 ? proto : cloneSkeleton(proto);
             scene.add(mesh);
-            instances.push({ mesh, ...configs[i] });
+            instances.push({ mesh, alive: true, ...configs[i] });
         }
 
-        return (elapsed) => {
+        const update = (elapsed) => {
             for (let i = 0; i < instances.length; i++) {
-                const { mesh, ax, bz, speed, phase, yPhase, yAmp } = instances[i];
+                const inst = instances[i];
+                if (!inst.alive) continue;
+                const { mesh, ax, bz, speed, phase, yPhase, yAmp } = inst;
                 const u = elapsed * speed + phase;
                 const x = LAKE_CX + Math.cos(u) * ax;
                 const z = LAKE_CZ + Math.sin(u) * bz;
@@ -96,6 +98,8 @@ export async function loadLakeFish(scene) {
                 mesh.rotation.z = 0;
             }
         };
+
+        return { update, instances };
     } catch (err) {
         console.warn('Lake fish failed to load — check public/models/fish/', err);
         return null;
